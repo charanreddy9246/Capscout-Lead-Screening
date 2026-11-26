@@ -147,7 +147,7 @@ def test_event_description_has_staff_gps_and_changes(client, make_staff, db):
     desc = next(iter(fake.events.values()))["Description"]
     assert "Staff: Staff A1" in desc
     assert "https://www.google.com/maps?q=17.385044,78.486671" in desc
-    assert "- Loan Required (₹): 25" in desc
+    assert "- Requested Loan Amount (₹): 25" in desc
 
 
 def test_no_gps_reason_is_sent(client, make_staff, db):
@@ -204,7 +204,7 @@ def test_meeting_after_conversion_is_linked_and_updates_the_lead(client, make_st
     update = fake.calls_to("updateRecord", "Leads")[-1]["body"]["data"][0]
     # The mapped field this meeting changed, plus the app's own Description block. Nothing else.
     assert set(update) == {"Company", "Description"} and update["Company"] == "RK Traders Pvt Ltd"
-    assert "Business Name: RK Traders Pvt Ltd" in update["Description"] and "Monthly Banking (₹): 45" in update["Description"]
+    assert "Company Name: RK Traders Pvt Ltd" in update["Description"] and "Monthly Banking (₹): 45" in update["Description"]
     assert len(fake.leads) == 1  # updated, never duplicated
 
 

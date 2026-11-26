@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from app.access import get_visible_customer
-from app.auth import CurrentStaff, DbSession
+from app.access import get_own_customer, get_visible_customer
+from app.auth import CurrentStaff, DbSession, FieldStaff
 from app.models import AuditLog, Meeting, Staff, SyncStatus
 from app.routers.customers import OTHER_STAFF_MESSAGE
 from app.services.customers import DuplicateOtherStaff, DuplicateOwn, InvalidValues, OnDuplicate, summary
@@ -41,8 +41,8 @@ def list_meetings(customer_id: uuid.UUID, staff: CurrentStaff, db: DbSession) ->
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_meeting(customer_id: uuid.UUID, body: MeetingIn, staff: CurrentStaff, db: DbSession):
-    customer = get_visible_customer(db, staff, customer_id)
+def create_meeting(customer_id: uuid.UUID, body: MeetingIn, staff: FieldStaff, db: DbSession):
+    customer = get_own_customer(db, staff, customer_id)
     try:
         meeting, created = complete_meeting(db, staff, customer, body)
     except InvalidValues as e:
@@ -87,7 +87,7 @@ class NewLeadIn(BaseModel):
 
 
 @new_lead_router.post("/leads/new", status_code=status.HTTP_201_CREATED)
-def create_new_lead(body: NewLeadIn, staff: CurrentStaff, db: DbSession):
+def create_new_lead(body: NewLeadIn, staff: FieldStaff, db: DbSession):
     """The prototype's "New lead" flow: prospect + Meeting #1 in one step."""
     try:
         customer, meeting, created = new_lead_with_meeting(

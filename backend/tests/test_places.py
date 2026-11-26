@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from app.config import get_settings
 from app.db import get_sessionmaker
 from app.models import Meeting
-from app.services.places import build_place_name, resolve_pending
+from app.services.places import build_area_name, build_place_name, resolve_pending
 from tests.test_meetings import GPS_A, _meeting, _new_lead, _post
 from tests.test_zoho_sync import FakeZoho, _meeting_row, run
 
@@ -29,11 +29,11 @@ def test_real_indian_map_data_gives_the_locality_not_a_ward_number():
 
     real = {"address": {"road": "2nd Avenue, Anna Nagar West", "neighbourhood": "Ward 99", "suburb": "Zone 8 Anna Nagar",
                         "town": "Maduravoyal", "city": "Chennai", "state": "Tamil Nadu", "country": "India"}}
-    assert build_area_name(real) == "Anna Nagar West, Chennai"
+    assert build_area_name(real) == "2nd Avenue, Anna Nagar West, Chennai, Tamil Nadu"
     assert build_place_name(real) == "2nd Avenue, Anna Nagar West, Chennai, Tamil Nadu"
     # with no locality in the road, a zone name is cleaned ("Zone 8 Anna Nagar" -> "Anna Nagar")
     zone = {"address": {"road": "Main Road", "suburb": "Zone 8 Anna Nagar", "city": "Chennai"}}
-    assert build_area_name(zone) == "Anna Nagar, Chennai"
+    assert build_area_name(zone) == "Main Road, Anna Nagar, Chennai"
     # a bare ward number is never used
     assert build_area_name({"address": {"neighbourhood": "Ward 99", "city": "Chennai"}}) == "Chennai"
 
@@ -41,7 +41,7 @@ def test_real_indian_map_data_gives_the_locality_not_a_ward_number():
 def test_place_name_is_short_and_readable():
     data = {"address": {"road": "3rd Street", "neighbourhood": "Shanthi Colony", "suburb": "Anna Nagar",
                         "city": "Chennai", "state": "Tamil Nadu", "country": "India", "postcode": "600040"}}
-    assert build_place_name(data) == "3rd Street, Shanthi Colony, Chennai, Tamil Nadu"
+    assert build_place_name(data) == "Shanthi Colony, 3rd Street, Anna Nagar, Chennai, Tamil Nadu 600040"
     # repeated names are not shown twice; missing parts are skipped
     assert build_place_name({"address": {"suburb": "Kukatpally", "city": "Kukatpally", "state": "Telangana"}}) == "Kukatpally, Telangana"
     assert build_place_name({"display_name": "Somewhere, India"}) == "Somewhere, India"
@@ -174,7 +174,7 @@ ANNA_NAGAR = {"address": {"road": "2nd Avenue", "suburb": "Anna Nagar West", "ci
 def test_short_area_name():
     from app.services.places import build_area_name
 
-    assert build_area_name(ANNA_NAGAR) == "Anna Nagar West, Chennai"
+    assert build_area_name(ANNA_NAGAR) == "2nd Avenue, Anna Nagar West, Chennai, Tamil Nadu"
     assert build_area_name({"address": {"city": "Chennai"}}) == "Chennai"
     assert build_area_name({"address": {"suburb": "Kukatpally", "city": "Kukatpally"}}) == "Kukatpally"
     assert build_area_name({}) is None
@@ -190,7 +190,10 @@ def test_reverse_endpoint_returns_the_area_and_the_full_place(client, make_staff
 
     r = client.get("/api/geo/reverse?lat=13.085&lng=80.2101", headers=a)
     assert r.status_code == 200
-    assert r.json() == {"place": "2nd Avenue, Anna Nagar West, Chennai, Tamil Nadu", "area": "Anna Nagar West, Chennai"}
+    assert r.json() == {
+        "place": "2nd Avenue, Anna Nagar West, Chennai, Tamil Nadu",
+        "area": "2nd Avenue, Anna Nagar West, Chennai, Tamil Nadu",
+    }
     assert calls == [(13.085, 80.2101)]  # only the two numbers were sent anywhere
     client.get("/api/geo/reverse?lat=13.08502&lng=80.21008", headers=a)  # a few metres away
     assert len(calls) == 1  # answered from the cache
@@ -218,3 +221,15 @@ def test_reverse_endpoint_needs_sign_in_and_valid_numbers(client, make_staff):
     _, a = make_staff("A1")
     assert client.get("/api/geo/reverse?lat=999&lng=80", headers=a).status_code == 422
     assert client.get("/api/geo/reverse?lat=13", headers=a).status_code == 422
+
+
+def test_place_has_block_street_area_city_and_state():
+    # What the map service really answers for a spot in Anna Nagar, Chennai.
+    data = {"address": {"road": "4th Avenue (Santhi Colony Road)", "neighbourhood": "AB Block",
+                        "suburb": "Zone 8 Anna Nagar", "city": "Chennai", "state": "Tamil Nadu", "postcode": "600040"}}
+    assert build_place_name(data) == "AB Block, 4th Avenue (Santhi Colony Road), Anna Nagar, Chennai, Tamil Nadu 600040"
+    # no pincode in the map data: the place is simply shown without one
+    del data["address"]["postcode"]
+    assert build_place_name(data).endswith("Chennai, Tamil Nadu")
+    data["address"]["postcode"] = "600040"
+    assert build_area_name(data) == build_place_name(data)  # the lead's Location carries the street too

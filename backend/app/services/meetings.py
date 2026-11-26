@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.models import ConversionStatus, Customer, GpsStatus, Meeting, MeetingStatus, Staff, SyncStatus
 from app.services.conversion import request_conversion
+from app.services.follow_ups import plan_after_meeting
 from app.services.customers import (
     IDENTITY_KEYS,
     DuplicateOtherStaff,
@@ -137,6 +138,8 @@ def complete_meeting(db: Session, staff: Staff, customer: Customer, data: Meetin
     _set_gps(meeting, "end", data.gps_end)
     db.add(meeting)
 
+    db.flush()
+    plan_after_meeting(db, staff, customer, meeting, cleaned)
     customer.meeting_count += 1
     if customer.last_meeting_at is None or data.started_at > customer.last_meeting_at:
         customer.last_meeting_at = data.started_at

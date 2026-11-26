@@ -36,6 +36,7 @@ def test_convert_request_waits_for_zoho_before_moving_tabs(client, make_staff, d
     assert detail["conversion_status"] == "CONVERTED"
     assert detail["zoho_lead_id"] == "ZL-1001"
     assert detail["converted_at"] is not None
+    assert detail["loan_stage"] == "Document collection" and detail["values"]["next_action"] == "Document collection"  # a new lead starts here
     assert cid in _tab(client, a, "converted")
     assert cid not in _tab(client, a, "not_converted")
 
@@ -134,3 +135,20 @@ def test_proceed_recommendation_turns_the_prospect_into_a_lead(client, make_staf
     # ...until a later meeting says Proceed.
     _post(client, a, other, _meeting({"sm_recommendation": "Proceed"}, started="2026-09-03T10:00:00+05:30"))
     assert client.get(f"/api/customers/{other}", headers=a).json()["conversion_status"] == "CONVERTING"
+
+
+def test_a_lead_that_already_has_a_stage_keeps_it_and_a_leftover_prospect_value_is_replaced(client, make_staff, db):
+    _, a = make_staff("A1")
+    keep = _lead(client, a)
+    c = db.get(Customer, keep)
+    c.current_values = {**c.current_values, "next_action": "Login"}
+    db.commit()
+    lead_created(db, db.get(Customer, keep), "ZL-2001")
+    assert client.get(f"/api/customers/{keep}", headers=a).json()["loan_stage"] == "Login"
+
+    old = _lead(client, a, promoter="Old Value", mobile="9876543299")
+    c = db.get(Customer, old)
+    c.current_values = {**c.current_values, "next_action": "Qualified"}  # an old prospect value, not a stage
+    db.commit()
+    lead_created(db, db.get(Customer, old), "ZL-2002")
+    assert client.get(f"/api/customers/{old}", headers=a).json()["loan_stage"] == "Document collection"

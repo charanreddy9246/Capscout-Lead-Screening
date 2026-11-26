@@ -25,6 +25,12 @@ export function shortDate(iso: string | Date): string {
   return `${wd} ${dm}`
 }
 
+// 2026-11-04 -> "04 Nov 2026"
+export function dayMonthYear(iso: string): string {
+  const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso)
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+}
+
 export function dayMonth(d: Date = new Date()): string {
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
 }

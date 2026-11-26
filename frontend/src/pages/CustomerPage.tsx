@@ -2,11 +2,16 @@
 // Not in the prototype, so it is built from the prototype's components.
 
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { api, ApiError, post, type CustomerDetail } from '../api'
-import { IconArrow, IconBack, IconCheck } from '../components/icons'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { api, ApiError, post, type CustomerDetail, type DealList, type SentMessage } from '../api'
+import { stageColors } from '../components/DealCard'
+import { formatINR } from '../format'
+import { useAuth } from '../auth'
+import { IconArrow, IconBack } from '../components/icons'
 import MeetingHistory from '../components/MeetingHistory'
 import { displayName, relativeDay } from '../format'
+import { useFieldCatalog } from '../fields'
+import { MessageButton } from '../components/MessageSheet'
 import { friendlyZohoError } from '../zohoErrors'
 import { loadDraft } from '../meetingDraft'
 
@@ -17,14 +22,15 @@ const STATUS_LABEL: Record<CustomerDetail['conversion_status'], string> = {
   CONVERSION_FAILED: 'Conversion failed',
 }
 const SLOW_AFTER_MS = 20_000 // a normal conversion finishes in a few seconds
-const TABS = ['Lead', 'Business', 'Money', 'Property', 'Assess', 'Decide']
 
 export default function CustomerPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
+  const fromDeals = useSearchParams()[0].get('from') === 'deals' // opened from the Deals tab: view only
   const [c, setC] = useState<CustomerDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showCount, setShowCount] = useState(false)
+  const [msgTick, setMsgTick] = useState(0) // bumped when a message is sent, to refresh the log
   const [retrying, setRetrying] = useState(false)
   const [convertError, setConvertError] = useState<string | null>(null)
 
@@ -72,7 +78,9 @@ export default function CustomerPage() {
   }, [converting_, id])
 
   const converted = c?.conversion_status === 'CONVERTED'
-  const back = () => navigate(converted ? '/?tab=converted' : '/')
+  const { staff } = useAuth()
+  const isOwner = !!c && !!staff && c.owner.id === staff.id // anyone can look at it (by role); only its owner changes it
+  const back = () => (isOwner || staff?.role === 'SM' ? navigate(fromDeals ? '/?tab=deals' : converted ? '/?tab=converted' : '/') : navigate(-1))
   const hasDraft = loadDraft(id) !== null
 
   return (
@@ -98,10 +106,27 @@ export default function CustomerPage() {
         {!c && !error && <div className="empty">Loading…</div>}
         {c && (
           <>
+            {c.conversion_status === 'CONVERTED' && <DealInfo customerId={id} />}
+            {c.conversion_status === 'CONVERTED' && <LoanJourney stage={c.loan_stage ?? null} />}
             <div className="card" style={{ padding: '14px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               {(c.promoter || c.mobile) && (
                 <div style={{ fontSize: 14, color: 'var(--muted)' }}>
                   {[c.business_name ? c.promoter : null, c.mobile ? `+91 ${c.mobile}` : null].filter(Boolean).join(' · ')}
+                </div>
+              )}
+              {isOwner && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div className="lbl" style={{ margin: 0 }}>
+                    Contact customer
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <MessageButton customerId={id} onSent={() => setMsgTick((n) => n + 1)} />
+                    {c.mobile && (
+                      <a className="gps-refresh" href={`tel:+91${c.mobile}`} style={{ textDecoration: 'none' }}>
+                        Call
+                      </a>
+                    )}
+                  </div>
                 </div>
               )}
               {c.zoho_lead_id && (
@@ -134,60 +159,36 @@ export default function CustomerPage() {
               onRetry={retryConversion}
             />
 
-            <div className="card">
-              {c.sections.map((s, i) => {
-                const done = s.filled === s.total
-                return (
-                  <div key={s.key} className="row">
-                    <span
-                      style={{
-                        flex: 'none',
-                        width: 22,
-                        height: 22,
-                        borderRadius: 11,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        background: done ? '#2F8F62' : '#E7ECF1',
-                        color: done ? '#fff' : 'var(--navy)',
-                      }}
-                    >
-                      {done ? <IconCheck size={12} width={3.2} /> : i + 1}
-                    </span>
-                    <div className="t">
-                      {TABS[i]} <span className="muted" style={{ fontSize: 13 }}>· {s.label}</span>
-                    </div>
-                    <div className="mono" style={{ fontSize: 14, fontWeight: 600, color: done ? 'var(--good)' : 'var(--muted)' }}>
-                      {s.filled}/{s.total}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="h" style={{ marginTop: 4 }}>
-              Meeting history
-            </div>
-            <MeetingHistory customerId={id} reloadKey={`${c.meeting_count}:${c.conversion_status}`} />
+              <MessageLog customerId={id} refreshKey={msgTick} />
+              <div className="h" style={{ marginTop: 4 }}>
+                Meeting history
+              </div>
+              <MeetingHistory customerId={id} reloadKey={`${c.meeting_count}:${c.conversion_status}`} />
           </>
         )}
       </div>
 
       <div className="foot">
         <div className="inner">
-          <button className="btn ghost" style={{ flex: 'none', width: 104 }} onClick={back}>
+          <button className="btn ghost" style={fromDeals ? { flex: 1 } : { flex: 'none', width: 104 }} onClick={back}>
             Back
           </button>
+          {isOwner && !fromDeals && ( // a deal is changed by the operations team; the meeting continues from the lead
           <button
             className="btn primary"
             style={{ flex: 1 }}
             disabled={!c}
             onClick={() => navigate(`/customers/${id}/meeting`)}
           >
-            {hasDraft ? 'Continue meeting' : converted ? 'New meeting' : 'Start meeting'} <IconArrow />
+            Next meeting
+            {hasDraft && (
+              <span className="tag warn" style={{ marginLeft: 2 }}>
+                Draft
+              </span>
+            )}{' '}
+            <IconArrow />
           </button>
+          )}
         </div>
       </div>
     </>
@@ -247,4 +248,90 @@ function ConversionPanel({
       </div>
     )
   return null
+}
+
+// Where a converted Lead has got to. The stage is chosen in a meeting ("Loan Stage" on the last step).
+function LoanJourney({ stage }: { stage: string | null }) {
+  const catalog = useFieldCatalog()
+  const stages = catalog?.fields.find((f) => f.key === 'next_action')?.options ?? []
+  const at = stage ? stages.indexOf(stage) : -1
+  return (
+    <div className="card" style={{ padding: '14px 14px' }}>
+      <div className="h" style={{ marginBottom: 10 }}>
+        Loan journey
+      </div>
+      <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {stages.map((s, i) => {
+          const done = i < at
+          const cur = i === at
+          return (
+            <li key={s} aria-current={cur ? 'step' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, fontWeight: cur ? 800 : 600, color: done || cur ? 'var(--navy)' : 'var(--muted)' }}>
+              <span className={`step-dot${cur ? ' cur' : ''}${done ? ' done' : ''}`} aria-hidden style={{ flex: 'none' }}>
+                {done ? '✓' : i + 1}
+              </span>
+              {s}
+            </li>
+          )
+        })}
+      </ol>
+      {at < 0 && <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>Not started. Pick the Loan Stage in your next meeting.</div>}
+    </div>
+  )
+}
+
+// What has been sent to this customer (everyone who can see the customer can read it).
+function MessageLog({ customerId, refreshKey }: { customerId: string; refreshKey: number }) {
+  const [items, setItems] = useState<SentMessage[] | null>(null)
+  useEffect(() => {
+    api<{ items: SentMessage[] }>(`/customers/${customerId}/messages`).then((d) => setItems(d.items)).catch(() => undefined)
+  }, [customerId, refreshKey])
+  if (!items || items.length === 0) return null
+  const label = { WHATSAPP: 'WhatsApp', SMS: 'SMS', COPY: 'Copied' } as const
+  return (
+    <details className="card" style={{ padding: 14 }}>
+      <summary className="h" style={{ cursor: 'pointer' }}>
+        Message history ({items.length})
+      </summary>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+        {items.map((m) => (
+          <div key={m.id} style={{ fontSize: 13 }}>
+            <div className="muted">
+              {label[m.channel]} · {new Date(m.sent_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+              {m.by ? ` · ${m.by}` : ''}
+            </div>
+            <div>{m.body}</div>
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+// The deal this lead became in Zoho. Read-only: the operations team changes it in Zoho.
+function DealInfo({ customerId }: { customerId: string }) {
+  const [deal, setDeal] = useState<DealList['items'][number]['deal'] | null>(null)
+  useEffect(() => {
+    api<DealList>(`/deals?customer_id=${customerId}`).then((d) => setDeal(d.items[0]?.deal ?? null)).catch(() => undefined)
+  }, [customerId])
+  if (!deal) return null
+  const [bg, fg] = stageColors(deal.stage)
+  return (
+    <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        <div className="h">Deal</div>
+        {deal.stage && (
+          <div className="status-pill" style={{ background: bg, color: fg }}>
+            {deal.stage}
+          </div>
+        )}
+      </div>
+      {deal.name && <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--navy)' }}>{deal.name}</div>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 600 }}>
+        <span className="mono">{deal.amount != null ? `₹${formatINR(deal.amount)}` : '—'}</span>
+        {deal.closing_date && <span className="muted">Closing {deal.closing_date}</span>}
+      </div>
+      {deal.next_step && <div className="muted" style={{ fontSize: 13 }}>Next step: {deal.next_step}</div>}
+      <div className="muted" style={{ fontSize: 12 }}>Managed by the operations team in Zoho. You can view it here but not change it.</div>
+    </div>
+  )
 }

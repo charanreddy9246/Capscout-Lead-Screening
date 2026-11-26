@@ -19,8 +19,9 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import ConversionStatus, Customer, Staff, SyncStatus
-from app.services.customers import audit
+from app.fields.catalog import load_catalog
+from app.models import ConversionStatus, Customer, FollowUp, FollowUpStatus, Staff, SyncStatus
+from app.services.customers import apply_values, audit
 
 
 class AlreadyLinkedElsewhere(Exception):
@@ -59,6 +60,20 @@ def request_conversion(
     return True
 
 
+FIRST_STAGE = "Document collection"
+
+
+def _start_the_loan_journey(db: Session, customer: Customer) -> None:
+    """A new lead starts at the first stage. A leftover prospect value is not a stage, so it is replaced."""
+    stages = next(f for f in load_catalog().fields if f.key == "next_action").options or ()
+    if (customer.current_values or {}).get("next_action") in stages:
+        return
+    apply_values(customer, {"next_action": FIRST_STAGE})
+    for fu in db.scalars(select(FollowUp).where(FollowUp.customer_id == customer.id, FollowUp.status == FollowUpStatus.PENDING)):
+        if fu.purpose not in stages:
+            fu.purpose = FIRST_STAGE
+
+
 def lead_created(db: Session, customer: Customer, zoho_lead_id: str) -> None:
     """Called once Zoho has created the Lead. Moves the customer to Converted Leads."""
     clash = db.scalar(select(Customer.id).where(Customer.zoho_lead_id == zoho_lead_id, Customer.id != customer.id))
@@ -67,6 +82,7 @@ def lead_created(db: Session, customer: Customer, zoho_lead_id: str) -> None:
     customer.zoho_lead_id = zoho_lead_id
     customer.conversion_status = ConversionStatus.CONVERTED
     customer.converted_at = datetime.now(UTC)
+    _start_the_loan_journey(db, customer)
     customer.zoho_sync_status = SyncStatus.SYNCED
     customer.zoho_last_error = None
     customer.zoho_next_attempt_at = None

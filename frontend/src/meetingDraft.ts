@@ -1,4 +1,5 @@
 import type { GpsPoint } from './api'
+import { isoDate } from './format'
 
 // The in-progress meeting lives on the phone until "Save meeting", so a closed
 // tab or a crash loses nothing. (Phase 4 moves this to IndexedDB with an
@@ -19,7 +20,14 @@ const key = (customerId: string) => `meeting-draft:${customerId}`
 export function loadDraft(customerId: string): MeetingDraft | null {
   try {
     const raw = localStorage.getItem(key(customerId))
-    return raw ? (JSON.parse(raw) as MeetingDraft) : null
+    if (!raw) return null
+    const draft = JSON.parse(raw) as MeetingDraft
+    // A draft left over from an earlier day: the meeting date is always today, and yesterday's GPS
+    // reading says nothing about where the sales manager is now, so both are renewed. What was typed stays.
+    if (isoDate(new Date(draft.startedAt)) !== isoDate(new Date())) {
+      return { ...draft, startedAt: new Date().toISOString(), gpsStart: null, gpsUnavailableReason: null }
+    }
+    return draft
   } catch {
     return null
   }

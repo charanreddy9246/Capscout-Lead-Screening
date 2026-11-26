@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError, post, type ConvertForm, type ZohoFormField } from '../api'
 import { IconArrow, IconBack } from '../components/icons'
+import { cleanMobile } from '../components/widgets'
 
 type Values = Record<string, string>
 
@@ -14,7 +15,6 @@ const CHIP_MAX = 6 // short lists are shown as one-tap buttons, longer ones as a
 // Also used for "New lead" (no id): the same Zoho form, blank, creating the customer and the Lead together.
 export default function ConvertPage() {
   const { id = '' } = useParams()
-  const isNew = !id
   const navigate = useNavigate()
   const [form, setForm] = useState<ConvertForm | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -24,7 +24,7 @@ export default function ConvertPage() {
   const [submitError, setSubmitError] = useState<string | null>(null)
 
   const load = useCallback(() => {
-    api<ConvertForm>(isNew ? '/customers/-/lead-form' : `/customers/${id}/convert-form`)
+    api<ConvertForm>(`/customers/${id}/convert-form`)
       .then((f) => {
         setForm(f)
         const initial: Values = {}
@@ -40,7 +40,7 @@ export default function ConvertPage() {
               : 'Could not load the Lead form.',
         ),
       )
-  }, [id, isNew])
+  }, [id])
 
   useEffect(() => {
     load()
@@ -80,11 +80,6 @@ export default function ConvertPage() {
         }
         body = { lead_values }
       }
-      if (isNew) {
-        const created = await post<{ id: string }>('/customers/-/new-lead', body)
-        navigate(`/customers/${created.id}`, { replace: true })
-        return
-      }
       await post(`/customers/${id}/convert`, body)
       navigate(`/customers/${id}`, { replace: true })
     } catch (e) {
@@ -111,7 +106,7 @@ export default function ConvertPage() {
     }
   }
 
-  const back = () => (isNew ? navigate('/?tab=converted') : navigate(`/customers/${id}`))
+  const back = () => navigate(`/customers/${id}`)
 
   return (
     <>
@@ -120,7 +115,7 @@ export default function ConvertPage() {
           <IconBack />
         </button>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>{isNew ? 'New lead' : 'Convert to Lead'}</div>
+          <div style={{ fontSize: 17, fontWeight: 700 }}>Convert to Lead</div>
           <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
             {form && form.customer ? `${form.customer.lead_ref} · ${form.customer.name ?? ''}` : 'Lead form'}
           </div>
@@ -147,18 +142,15 @@ export default function ConvertPage() {
           <>
             <div className="card" style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--navy)' }}>
-                {form.customer ? `Convert ${form.customer.name ?? form.customer.lead_ref} to Lead?` : 'Add a new lead'}
+                Convert {form.customer.name ?? form.customer.lead_ref} to Lead?
               </div>
               <div style={{ fontSize: 13, color: 'var(--ink)' }}>
-                {form.customer
-                  ? 'This will create the Lead with the details below. Check them and change anything that is wrong. All meetings stay with this lead.'
-                  : 'Fill in the Lead details below. The Lead is created when you save.'}
+                This will create the Lead with the details below. Check them and change anything that is wrong. All meetings
+                stay with this lead.
               </div>
-              {form.customer && (
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                  <span className="tag good">from the app</span> marks details filled in from what you already collected.
-                </div>
-              )}
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                <span className="tag good">from the app</span> marks details filled in from what you already collected.
+              </div>
             </div>
 
             <div className="card" style={{ padding: '4px 14px' }}>
@@ -189,7 +181,7 @@ export default function ConvertPage() {
               Cancel
             </button>
             <button className="btn primary" style={{ flex: 1 }} disabled={busy} onClick={() => submit(true)}>
-              {busy ? (isNew ? 'Saving…' : 'Converting…') : isNew ? 'Save lead' : 'Convert to Lead'} {!busy && <IconArrow />}
+              {busy ? 'Converting…' : 'Convert to Lead'} {!busy && <IconArrow />}
             </button>
           </div>
         </div>
@@ -308,8 +300,8 @@ function Control({
           type={type}
           inputMode={inputMode}
           value={value}
-          maxLength={field.max_length ?? undefined}
-          onChange={(e) => onChange(e.target.value)}
+          maxLength={field.kind === 'phone' ? 10 : (field.max_length ?? undefined)}
+          onChange={(e) => onChange(field.kind === 'phone' ? cleanMobile(e.target.value) : e.target.value)}
           autoComplete="off"
         />
       )

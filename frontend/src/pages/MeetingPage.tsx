@@ -6,7 +6,7 @@
 // "New lead" (/new) creates the prospect and its Meeting #1 together;
 // /customers/:id/meeting records the next meeting for an existing customer.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   api,
@@ -20,14 +20,15 @@ import {
 } from '../api'
 import { useAuth } from '../auth'
 import { IconArrow, IconCheck, IconGps, IconMic, IconX } from '../components/icons'
-import { Choice, cleanNumber, MoneyBox, MoneyField, TextField, TriRow } from '../components/widgets'
+import { Choice, cleanNumber, MobileField, MoneyField, TextField, TriRow } from '../components/widgets'
 import { DEPENDENT_FIELDS, useFieldCatalog } from '../fields'
-import { addDays, dayMonth, formatINR, isoDate, relativeDay, shortDate, shortStaffName } from '../format'
+import { addDays, dayMonth, dayMonthYear, formatINR, isoDate, relativeDay, shortDate, shortStaffName } from '../format'
+import { LOCATION_OFF, LocationGate } from '../components/LocationGate'
 import { captureLocation, GPS_ERROR_TEXT, GpsError, type GpsErrorCode } from '../gps'
 import { clearDraft, loadDraft, newDraft, saveDraft, type MeetingDraft } from '../meetingDraft'
 
 const STEPS = ['lead', 'business', 'money', 'property', 'assess', 'decide'] as const
-const TABS = ['Lead', 'Business', 'Money', 'Property', 'Assess', 'Decide']
+const TABS = ['Lead', 'Business', 'Money', 'Docs', 'Assess', 'Decide']
 const NEW = 'new'
 
 type Saved = { customerId: string; meeting: Meeting; leadRef: string }
@@ -56,7 +57,13 @@ export default function MeetingPage() {
   }
 
   if (!catalog || (!isNew && !customer)) return <div className="splash">Loading…</div>
-  if (saved) return <DoneScreen saved={saved} values={{ ...(customer?.values ?? {}), ...draft.values }} />
+  if (saved) {
+    const all = { ...(customer?.values ?? {}), ...draft.values }
+    // A Lead once converted, or when this meeting's Proceed converts it; otherwise it is still a prospect.
+    const isLead =
+      customer?.conversion_status === 'CONVERTED' || customer?.conversion_status === 'CONVERTING' || all.sm_recommendation === 'Proceed'
+    return <DoneScreen saved={saved} values={all} isLead={isLead} />
+  }
 
   const current = customer?.values ?? {}
   const v = (key: string) => draft.values[key] ?? current[key] ?? ''
@@ -126,34 +133,50 @@ export default function MeetingPage() {
             Save draft
           </button>
         </div>
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div className="steps" role="group" aria-label="Meeting steps">
           {TABS.map((t, i) => (
             <button
               key={t}
-              className={`tab${i === stepIdx ? ' cur' : i < stepIdx ? ' done' : ''}`}
+              type="button"
+              className={`step${i === stepIdx ? ' cur' : i < stepIdx ? ' done' : ''}`}
               aria-label={`Go to step ${i + 1}, ${t}`}
+              aria-current={i === stepIdx ? 'step' : undefined}
               onClick={() => go(i)}
             >
-              <span className="c">{i < stepIdx ? <IconCheck size={12} width={3.2} /> : i + 1}</span>
-              <span>{t}</span>
+              <span className="step-dot">{i < stepIdx ? <IconCheck size={14} width={3.2} /> : i + 1}</span>
+              <span className="step-name">{t}</span>
             </button>
           ))}
         </div>
       </div>
 
-      <div className="scroll">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>
-            Step {stepIdx + 1} of 6 · {caption}
+      {/* Fixed: the page title and, on page 1, the read-only facts. Only the fields below scroll. */}
+      <div className="page-fixed">
+        <div className="page-head">
+          <div>
+            <div className="page-title">{caption}</div>
+            <div className="page-sub">Step {stepIdx + 1} of 6</div>
           </div>
           <GpsStatus gps={gps} />
         </div>
+        {step === 'lead' && (
+          <div className="facts">
+            {/* Filled in by the app: shown for reference, never editable. */}
+            <AutoItem label={field('lead_id').label} value={customer?.lead_ref ?? 'On save'} mono />
+            <AutoItem label={field('date').label} value={shortDate(draft.startedAt)} />
+            <AutoItem label={field('sm_name').label} value={staff?.full_name ?? ''} />
+            <AutoItem label={field('assigned_to').label} value={staff?.full_name ?? ''} />
+          </div>
+        )}
+      </div>
+
+      <div className="scroll">
         {step === 'lead' && <LeadStep field={field} gps={gps} leadLocation={isNew ? '' : (current.location ?? '')} />}
         {step === 'business' && <BusinessStep field={field} />}
         {step === 'money' && <MoneyStep field={field} />}
         {step === 'property' && <PropertyStep field={field} />}
         {step === 'assess' && <AssessStep field={field} />}
-        {step === 'decide' && <DecideStep field={field} proceedToLead={proceedToLead} />}
+        {step === 'decide' && <DecideStep field={field} proceedToLead={proceedToLead} isLead={customer?.conversion_status === 'CONVERTED'} />}
       </div>
 
       <SaveFooter
@@ -172,6 +195,11 @@ export default function MeetingPage() {
         fallbackRef={ref}
         proceedToLead={proceedToLead}
       />
+
+      {/* No location, no meeting: this cannot be dismissed. */}
+      {!draft.gpsStart && gps.state === 'error' && gps.error && LOCATION_OFF.includes(gps.error) && (
+        <LocationGate error={gps.error} onRetry={gps.retry} onBack={() => navigate(leaveTo)} />
+      )}
     </>
   )
 }
@@ -209,8 +237,79 @@ function useShownPlace(point: GpsPoint | null): { state: 'idle' | 'loading' | 'o
   return shown.area ? { state: 'ok', area: shown.area } : { state: 'none', area: null }
 }
 
-function LeadStep({ field, gps, leadLocation }: { field: F; gps: MeetingGps; leadLocation: string }) {
+// A small read-only value (Lead ID, Date, Lead Owner).
+function AutoItem({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)' }}>{label}</div>
+      <div
+        className={mono ? 'mono' : undefined}
+        style={{ fontSize: 13, fontWeight: 700, color: 'var(--navy)', marginTop: 2, overflowWrap: 'anywhere' }}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
+// The GPS address on ONE line you can swipe sideways; tap it (or hold the pointer over it) to read it all.
+// A fade and an arrow at the edge show that there is more to the left or right.
+function GpsAddress({ text, muted }: { text: string; muted: boolean }) {
+  const [open, setOpen] = useState(false)
+  const line = useRef<HTMLDivElement>(null)
+  const [edge, setEdge] = useState({ more: false, atStart: true, atEnd: true })
+
+  const measure = () => {
+    const el = line.current
+    if (!el) return
+    const more = el.scrollWidth > el.clientWidth + 1
+    setEdge({ more, atStart: el.scrollLeft <= 1, atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 })
+  }
+  useEffect(() => {
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [text, open])
+
+  const scrollable = edge.more && !open
+  return (
+    <div className="gps-wrap">
+      <div
+        ref={line}
+        id="f-loc"
+        role="textbox"
+        tabIndex={0}
+        aria-readonly="true"
+        aria-labelledby="f-loc-label"
+        aria-expanded={open}
+        title={text}
+        className={`gps-text${muted ? ' muted' : ''}${open ? ' open' : ''}${scrollable && !edge.atEnd ? ' fade-r' : ''}${scrollable && !edge.atStart ? ' fade-l' : ''}`}
+        onScroll={measure}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setOpen((o) => !o))}
+      >
+        {text}
+      </div>
+      {scrollable && !edge.atEnd && (
+        <span className="gps-more" aria-hidden="true">
+          ›
+        </span>
+      )}
+    </div>
+  )
+}
+
+function LeadStep({
+  field,
+  gps,
+  leadLocation,
+}: {
+  field: F
+  gps: MeetingGps
+  leadLocation: string
+}) {
   const source = field('source_type')
+  const customerType = field('customer_type')
   const mobile = field('mobile')
   const loc = field('location')
   const place = useShownPlace(gps.point)
@@ -226,78 +325,37 @@ function LeadStep({ field, gps, leadLocation }: { field: F; gps: MeetingGps; lea
             : 'Not available (no GPS)'
   return (
     <>
+      <Choice {...customerType} />
+      <OtherBox field={field} of="customer_type" />
       <Choice {...source} />
-      <OtherBox field={field} of="source_type" />
       {source.value !== 'Direct' && (
         <div className="g2">
-          <TextField id="f-srcname" {...field('source_name')} placeholder="CA / DSA name" />
-          <TextField id="f-srccontact" {...field('source_contact')} placeholder="Mobile" type="tel" inputMode="tel" />
+          <TextField
+            id="f-srcname"
+            {...field('source_name')}
+            placeholder="CA / DSA name"
+          />
+          {(() => {
+            const contact = field('source_contact')
+            return <MobileField id="f-srccontact" label={contact.label} value={contact.value} onChange={contact.onChange} />
+          })()}
         </div>
       )}
-      <TextField id="f-biz" {...field('business_name')} placeholder="Registered business name" />
+      <div className="sec-gap" />
       <div className="g2">
         <TextField id="f-prom" {...field('promoter')} placeholder="Full name" />
-        <div>
-          <label className="lbl" htmlFor="f-mob">
-            {mobile.label}
-          </label>
-          <div className="box">
-            <span className="mono" style={{ fontSize: 15, color: 'var(--muted)' }}>
-              +91
-            </span>
-            <input
-              id="f-mob"
-              type="tel"
-              inputMode="numeric"
-              placeholder="10 digits"
-              style={{ fontWeight: 500 }}
-              value={mobile.value}
-              onChange={(e) => mobile.onChange(e.target.value.replace(/[^\d+ ]/g, ''))}
-            />
-          </div>
-        </div>
+        <MobileField id="f-mob" label={mobile.label} value={mobile.value} onChange={mobile.onChange} />
       </div>
       <div>
-        <label className="lbl" htmlFor="f-loc" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="lbl" id="f-loc-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>{loc.label}</span>
           <span className="tag good">from GPS</span>
-        </label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {/* Read-only on purpose: the location always comes from the GPS and is never typed. */}
-          <input
-            className="fld"
-            id="f-loc"
-            readOnly
-            value={shownText}
-            aria-readonly="true"
-            style={{
-              flex: 1,
-              minWidth: 0,
-              background: '#EEF1F4',
-              color: place.state === 'ok' ? 'var(--navy)' : 'var(--muted)',
-              fontWeight: place.state === 'ok' ? 600 : 500,
-            }}
-          />
-          <button
-            type="button"
-            aria-label="Get this meeting's GPS location again"
-            onClick={gps.retry}
-            style={{
-              flex: 'none',
-              height: 48,
-              padding: '0 14px',
-              borderRadius: 10,
-              border: '1.5px solid var(--navy)',
-              background: gps.point ? 'var(--navy)' : '#fff',
-              color: gps.point ? '#fff' : 'var(--navy)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              fontSize: 14,
-              fontWeight: 700,
-            }}
-          >
-            <IconGps /> GPS
+        </div>
+        {/* Read-only on purpose: the location always comes from the GPS and is never typed. */}
+        <div className="gps-line">
+          <GpsAddress text={shownText} muted={place.state !== 'ok'} />
+          <button type="button" className="gps-refresh" aria-label="Get this meeting's GPS location again" onClick={gps.retry}>
+            <IconGps /> Refresh
           </button>
         </div>
         {leadLocation && (
@@ -310,10 +368,9 @@ function LeadStep({ field, gps, leadLocation }: { field: F; gps: MeetingGps; lea
   )
 }
 
+// Page 2: the company and the person we deal with.
 function BusinessStep({ field }: { field: F }) {
-  const constitution = field('constitution')
   const vintage = field('vintage_years')
-  const loan = field('loan_required')
   const years = Number(vintage.value || 0)
   const stepBtn = {
     flex: 'none',
@@ -325,63 +382,63 @@ function BusinessStep({ field }: { field: F }) {
     fontSize: 22,
     fontWeight: 600,
   } as const
+  const poc = field('poc_mobile')
   return (
     <>
-      <Choice {...constitution} />
-      <OtherBox field={field} of="constitution" />
-      <TextField id="f-ind" {...field('industry')} placeholder="e.g. Food processing, Auto parts" />
+      <TextField id="f-biz" {...field('business_name')} placeholder="Registered company name" />
+
+      <div className="sec-gap" />
+      <TextField id="f-pocname" {...field('poc_name')} placeholder="Full name" />
       <div className="g2">
-        <div>
-          <label className="lbl" htmlFor="f-vint">
-            {vintage.label}
-          </label>
-          <div className="box" style={{ padding: 0, overflow: 'hidden' }}>
-            <button
-              type="button"
-              aria-label="Fewer years"
-              style={stepBtn}
-              onClick={() => vintage.onChange(String(Math.max(0, years - 1)))}
-            >
-              −
-            </button>
-            <input
-              id="f-vint"
-              className="mono"
-              inputMode="decimal"
-              placeholder="0"
-              value={vintage.value}
-              onChange={(e) => vintage.onChange(cleanNumber(e.target.value))}
-              style={{ textAlign: 'center', fontWeight: 700 }}
-            />
-            <span className="unit" style={{ paddingRight: 6 }}>
-              yrs
-            </span>
-            <button type="button" aria-label="More years" style={stepBtn} onClick={() => vintage.onChange(String(years + 1))}>
-              +
-            </button>
-          </div>
-        </div>
-        <div>
-          <label className="lbl" htmlFor="f-loan">
-            {loan.label}
-          </label>
-          <MoneyBox id="f-loan" value={loan.value} onChange={loan.onChange} />
+        <MobileField id="f-pocmob" label={poc.label} value={poc.value} onChange={poc.onChange} />
+        <TextField id="f-pocdes" {...field('poc_designation')} />
+      </div>
+      <TextField id="f-pocmail" {...field('poc_email')} type="email" inputMode="text" />
+
+      <div className="sec-gap" />
+      <Choice {...field('constitution')} kind="list" />
+      <div>
+        <label className="lbl" htmlFor="f-vint">
+          {vintage.label}
+        </label>
+        <div className="box" style={{ padding: 0, overflow: 'hidden' }}>
+          <button
+            type="button"
+            aria-label="Fewer years"
+            style={stepBtn}
+            onClick={() => vintage.onChange(String(Math.max(0, years - 1)))}
+          >
+            −
+          </button>
+          <input autoComplete="off"
+            id="f-vint"
+            className="mono"
+            inputMode="decimal"
+            placeholder="0"
+            value={vintage.value}
+            onChange={(e) => vintage.onChange(cleanNumber(e.target.value))}
+            style={{ textAlign: 'center', fontWeight: 700 }}
+          />
+          <span className="unit" style={{ paddingRight: 6 }}>
+            yrs
+          </span>
+          <button type="button" aria-label="More years" style={stepBtn} onClick={() => vintage.onChange(String(years + 1))}>
+            +
+          </button>
         </div>
       </div>
-      <Choice {...field('purpose')} />
-      <OtherBox field={field} of="purpose" />
-      <Choice {...field('urgency')} kind="seg" />
-      <Choice {...field('secured_unsecured')} kind="seg" />
+      <TextField id="f-ind" {...field('industry')} />
+      <Choice {...field('sector')} />
     </>
   )
 }
 
 function CreditFlags({ field }: { field: F }) {
-  const flags = ['overdue', 'bounces', 'settlement_write_off'].map(field)
+  const flags = ['overdue', 'bounces', 'settlement_write_off', 'litigation_dispute'].map(field)
   const n = flags.filter((f) => f.value === 'Yes').length
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
         <div className="h">Credit red flags</div>
         <div
           style={{
@@ -405,6 +462,7 @@ function CreditFlags({ field }: { field: F }) {
   )
 }
 
+// Page 3: what they want to borrow, then their money position.
 function MoneyStep({ field }: { field: F }) {
   const money = (key: string, id: string) => {
     const f = field(key)
@@ -412,38 +470,39 @@ function MoneyStep({ field }: { field: F }) {
   }
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <div className="h">Financials</div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>Type the full amount in rupees</div>
-      </div>
+      {money('loan_required', 'f-loan')}
+      <Choice {...field('purpose')} />
+      <Choice {...field('urgency')} kind="seg" />
+      <Choice {...field('secured_unsecured')} kind="seg" />
+
+      <div className="sec-gap" />
       <div className="g2">
         {money('annual_turnover', 'm-turn')}
         {money('monthly_banking', 'm-bank')}
+        {money('monthly_surplus', 'm-surp')}
         {money('existing_debt', 'm-debt')}
         {money('monthly_emi', 'm-emi')}
       </div>
-      <CreditFlags field={field} />
-      <div className="h" style={{ marginTop: 6 }}>
-        Documents available
-      </div>
+    </>
+  )
+}
+
+// Page 4: documents, then property.
+function PropertyStep({ field }: { field: F }) {
+  const prop = field('property_available')
+  const value = field('property_value')
+  const unsecured = field('secured_unsecured').value === 'Unsecured'
+  const off = unsecured || prop.value === 'No' // nothing to fill: the property details are greyed out
+  return (
+    <>
       <div className="card">
         <TriRow {...field('gst_available')} />
         <TriRow {...field('itr_financials')} />
         <TriRow {...field('bank_statements')} />
       </div>
-      {/* No dropdown for Litigation/Dispute in the Excel, so it is typed. */}
-      <TextField id="f-litig" {...field('litigation_dispute')} placeholder="Type details, or leave blank" />
-    </>
-  )
-}
+      <Choice {...field('documents_readiness')} kind="seg" />
 
-function PropertyStep({ field }: { field: F }) {
-  const prop = field('property_available')
-  const unsecured = field('secured_unsecured').value === 'Unsecured'
-  const off = unsecured || prop.value === 'No' // nothing to fill: the rest of the step is greyed out
-  return (
-    <>
-      <div className="h">Property</div>
+      <div className="sec-gap" />
       {unsecured && (
         <div role="status" style={{ padding: '8px 12px', borderRadius: 10, background: '#EEF1F4', color: 'var(--navy)', fontSize: 13, fontWeight: 600 }}>
           Property details are not required for unsecured loans.
@@ -452,10 +511,9 @@ function PropertyStep({ field }: { field: F }) {
       <div className="card">
         <TriRow {...prop} disabled={unsecured} />
       </div>
-      <Choice {...field('property_type')} disabled={off} />
-      {!off && <OtherBox field={field} of="property_type" />}
+      <MoneyField id="f-propval" label={value.label} value={value.value} onChange={value.onChange} disabled={off} />
       <div className="card">
-        <TriRow {...field('property_documents')} disabled={off} />
+        <TriRow {...field('existing_mortgage')} disabled={off} />
       </div>
     </>
   )
@@ -473,6 +531,7 @@ const SCORE: Record<string, number> = {
   Significant: 0,
 }
 
+// Page 5: credit red flags, then the sales manager's assessment.
 function AssessStep({ field }: { field: F }) {
   const docs = field('documents_readiness')
   const biz = field('business_quality')
@@ -487,7 +546,9 @@ function AssessStep({ field }: { field: F }) {
     total === null ? null : grade.options[total >= 7 ? 0 : total >= 5 ? 1 : total >= 3 ? 2 : 3] ?? null
   return (
     <>
-      <Choice {...docs} kind="seg" />
+      <CreditFlags field={field} />
+
+      <div className="sec-gap" />
       <Choice {...biz} kind="seg" />
       <Choice {...bank} kind="seg" />
       <Choice {...risk} kind="seg" />
@@ -529,29 +590,92 @@ function AssessStep({ field }: { field: F }) {
           })}
         </div>
       </div>
-      <Choice {...field('likely_product')} kind="hs" />
-      <OtherBox field={field} of="likely_product" />
-      <TextField id="f-lender" {...field('potential_lender')} placeholder="Type or pick from lender list" />
     </>
   )
 }
 
-const REC_COLOR: Record<string, string> = { Proceed: '#1F6F4A', Hold: '#9A5B00', Reject: '#9F1D1D' }
-
-function DecideStep({ field, proceedToLead }: { field: F; proceedToLead: boolean }) {
-  const rec = field('sm_recommendation')
-  const date = field('next_action_date')
-  const comments = field('reason_comments')
+// A date with quick picks (Today / Tomorrow / In 3 days) and a calendar. The chosen date is shown once,
+// in brackets after the label, e.g. "Follow up Date (04 Nov 2026)".
+function QuickDate({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   const today = new Date()
   const quick: [string, string][] = [
     ['Today', isoDate(today)],
     ['Tomorrow', isoDate(addDays(today, 1))],
     ['In 3 days', isoDate(addDays(today, 3))],
   ]
-  const isQuick = quick.some(([, d]) => d === date.value)
-  const [picking, setPicking] = useState(!!date.value && !isQuick)
+  const isQuick = quick.some(([, d]) => d === value)
+  const [fallback, setFallback] = useState(false) // only if the browser cannot open its calendar by itself
+  const calendar = useRef<HTMLInputElement>(null)
+  const custom = !!value && !isQuick
+  function pick() {
+    try {
+      calendar.current?.showPicker() // the browser's own calendar opens right away
+    } catch {
+      setFallback(true) // older browsers: show the date box instead
+    }
+  }
+  return (
+    <div style={{ position: 'relative' }}>
+      <div className="lbl">
+        {label}
+        {value && (
+          <span className="mono" style={{ marginLeft: 6, fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>
+            ({dayMonthYear(value)})
+          </span>
+        )}
+      </div>
+      <div className="seg">
+        {quick.map(([name, d]) => (
+          <button
+            key={name}
+            type="button"
+            className={`sg${value === d ? ' on' : ''}`}
+            style={{ fontSize: 13, height: 42 }}
+            onClick={() => {
+              setFallback(false)
+              onChange(value === d ? '' : d)
+            }}
+          >
+            {name}
+          </button>
+        ))}
+        <button type="button" className={`sg${custom ? ' on' : ''}`} style={{ fontSize: 13, height: 42 }} onClick={pick}>
+          Pick date
+        </button>
+      </div>
+      {/* The calendar itself: invisible, opened by "Pick date" and placed under the buttons. */}
+      <input
+        ref={calendar}
+        autoComplete="off"
+        type="date"
+        aria-label={label}
+        value={value}
+        tabIndex={-1}
+        onChange={(e) => {
+          onChange(e.target.value)
+          setFallback(false)
+        }}
+        style={
+          fallback
+            ? { marginTop: 8, width: '100%', height: 48, padding: '0 14px', border: '1.5px solid var(--line)', borderRadius: 12, fontSize: 16 }
+            : { position: 'absolute', left: 0, bottom: 0, width: '100%', height: 1, opacity: 0, pointerEvents: 'none', border: 0, padding: 0 }
+        }
+      />
+    </div>
+  )
+}
+
+const REC_COLOR: Record<string, string> = { Proceed: '#1F6F4A', Hold: '#9A5B00', Reject: '#9F1D1D' }
+
+// Page 6: who might fund it, the recommendation, and what happens next.
+function DecideStep({ field, proceedToLead, isLead }: { field: F; proceedToLead: boolean; isLead: boolean }) {
+  const rec = field('sm_recommendation')
+  const followUp = field('next_action_date')
+  const followTime = field('follow_up_time')
+  const comments = field('reason_comments')
   return (
     <>
+      <TextField id="f-lender" {...field('potential_lender')} />
       <div>
         <div className="lbl">{rec.label}</div>
         <div className="seg" style={{ gap: 8 }}>
@@ -589,53 +713,22 @@ function DecideStep({ field, proceedToLead }: { field: F; proceedToLead: boolean
           </div>
         )}
       </div>
-      {/* No dropdown for Status in the Excel, so it is typed. */}
-      <TextField id="f-status" {...field('status')} placeholder="Type the status" />
-      <Choice {...field('next_action')} kind="hs" />
-      <div>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
-          <div className="lbl" style={{ margin: 0 }}>
-            {date.label}
-          </div>
-          <div className="mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--navy)' }}>
-            {date.value ? shortDate(date.value) : picking ? 'Choose…' : ''}
+      {isLead && <Choice {...field('next_action')} kind="list" />}
+      <div className="sec-gap" />
+      <QuickDate label={followUp.label} value={followUp.value} onChange={followUp.onChange} />
+      {followUp.value && (
+        <div>
+          <label className="lbl" htmlFor="f-follow-time">
+            {followTime.label}
+          </label>
+          <input id="f-follow-time" className="fld" type="time" value={followTime.value} onChange={(e) => followTime.onChange(e.target.value)} />
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Leave empty for 10:00 AM.
           </div>
         </div>
-        <div className="seg">
-          {quick.map(([label, d]) => (
-            <button
-              key={label}
-              type="button"
-              className={`sg${date.value === d && !picking ? ' on' : ''}`}
-              style={{ fontSize: 13, height: 42 }}
-              onClick={() => {
-                setPicking(false)
-                date.onChange(date.value === d ? '' : d)
-              }}
-            >
-              {label}
-            </button>
-          ))}
-          <button
-            type="button"
-            className={`sg${picking ? ' on' : ''}`}
-            style={{ fontSize: 13, height: 42 }}
-            onClick={() => setPicking(true)}
-          >
-            Pick date
-          </button>
-        </div>
-        {picking && (
-          <input
-            className="fld"
-            type="date"
-            aria-label={date.label}
-            value={date.value}
-            onChange={(e) => date.onChange(e.target.value)}
-            style={{ marginTop: 8 }}
-          />
-        )}
-      </div>
+      )}
+      <div className="sec-gap" />
+      <Choice {...field('status')} kind="list" />
       <CommentsField {...comments} />
     </>
   )
@@ -677,7 +770,7 @@ function CommentsField({ label, value, onChange }: FieldProps) {
   }
 
   return (
-    <div>
+    <div className="span-all">
       <label className="lbl" htmlFor="f-comments">
         {label}
       </label>
@@ -778,11 +871,11 @@ function GpsStatus({ gps }: { gps: MeetingGps }) {
 
 // --- footer: Back / Next / Save, with GPS-reason and duplicate sheets --------------------------
 
-const NO_GPS_REASONS = ['Location permission denied', 'GPS switched off', 'No GPS signal at this place', 'Other']
+const NO_GPS_REASONS = ['Location permission denied', 'GPS switched off', 'Other']
 const REASON_FOR_ERROR: Partial<Record<GpsErrorCode, string>> = {
   denied: 'Location permission denied',
   unavailable: 'GPS switched off',
-  timeout: 'No GPS signal at this place',
+  timeout: 'Other', // location is on but there is no fix: the staff member types why
 }
 
 function SaveFooter({
@@ -878,7 +971,7 @@ function SaveFooter({
   return (
     <>
       {error && (
-        <div style={{ padding: '0 16px 10px', background: 'var(--ground)' }}>
+        <div className="form-err" style={{ padding: '0 16px 10px', background: 'var(--ground)' }}>
           <div className="err" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
             <span style={{ flex: 1 }}>{error}</span>
             <button
@@ -1008,7 +1101,14 @@ function ReasonSheet({
           ))}
         </div>
         {reason === 'Other' && (
-          <input className="fld" placeholder="Type the reason" maxLength={300} value={other} onChange={(e) => setOther(e.target.value)} />
+          <input autoComplete="off"
+            className="fld"
+            placeholder="Type the reason"
+            maxLength={300}
+            value={other}
+            autoFocus
+            onChange={(e) => setOther(e.target.value)}
+          />
         )}
         <button className="btn primary" disabled={!final} onClick={() => onConfirm(final)}>
           Save without GPS
@@ -1077,7 +1177,7 @@ function DuplicateSheet({
 
 // --- after saving (prototype's "Lead submitted" screen) ---------------------------------------
 
-function DoneScreen({ saved, values }: { saved: Saved; values: Record<string, string> }) {
+function DoneScreen({ saved, values, isLead }: { saved: Saved; values: Record<string, string>; isLead: boolean }) {
   const navigate = useNavigate()
   const { meeting } = saved
   const rows = useMemo(
@@ -1088,7 +1188,7 @@ function DoneScreen({ saved, values }: { saved: Saved; values: Record<string, st
         ['Grade', values.opportunity_grade],
         ['Recommendation', [values.sm_recommendation, values.status].filter(Boolean).join(' · ')],
         [
-          'Next action',
+          'Next visit',
           [values.next_action, values.next_action_date ? shortDate(values.next_action_date) : null].filter(Boolean).join(' · '),
         ],
         ['GPS', meeting.gps_start ? `Captured ±${Math.round(meeting.gps_start.accuracy_m)} m` : `No GPS — ${meeting.gps_unavailable_reason}`],
@@ -1113,7 +1213,7 @@ function DoneScreen({ saved, values }: { saved: Saved; values: Record<string, st
           <IconCheck size={40} width={2.6} />
         </div>
         <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--navy)' }}>
-          {meeting.sequence_no === 1 ? 'Lead saved' : 'Meeting saved'}
+          Meeting saved
         </div>
         <div className="mono" style={{ fontSize: 14, color: 'var(--muted)' }}>
           {saved.leadRef} · Meeting #{meeting.sequence_no} · Sync pending
@@ -1130,10 +1230,10 @@ function DoneScreen({ saved, values }: { saved: Saved; values: Record<string, st
       <div style={{ flex: 1 }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <button className="btn primary" style={{ height: 56, fontSize: 17 }} onClick={() => navigate(`/customers/${saved.customerId}`)}>
-          Open lead
+          {isLead ? 'Open lead' : 'Open customer'}
         </button>
-        <button className="btn ghost" onClick={() => navigate('/')}>
-          Back to my leads
+        <button className="btn ghost" onClick={() => navigate(isLead ? '/?tab=converted' : '/')}>
+          {isLead ? 'Back to my leads' : 'Back to my meetings'}
         </button>
       </div>
     </div>

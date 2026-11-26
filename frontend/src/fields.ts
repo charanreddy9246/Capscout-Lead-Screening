@@ -29,18 +29,14 @@ export function fieldLabel(catalog: FieldCatalog | null, key: string): string {
 export const DEPENDENT_FIELDS: Record<string, [string, (parentValue: string) => boolean][]> = {
   source_name: [['source_type', (v) => v !== 'Direct']],
   source_contact: [['source_type', (v) => v !== 'Direct']],
-  constitution_other: [['constitution', (v) => v === 'Other']],
-  source_type_other: [['source_type', (v) => v === 'Other']],
-  purpose_other: [['purpose', (v) => v === 'Other']],
-  likely_product_other: [['likely_product', (v) => v === 'Other']],
-  property_type_other: [['property_type', (v) => v === 'Other']],
+  customer_type_other: [['customer_type', (v) => v === 'Other']],
   // Property questions do not apply to an unsecured loan, or when there is no property.
   property_available: [['secured_unsecured', (v) => v !== 'Unsecured']],
-  property_type: [
+  property_value: [
     ['property_available', (v) => v !== 'No'],
     ['secured_unsecured', (v) => v !== 'Unsecured'],
   ],
-  property_documents: [
+  existing_mortgage: [
     ['property_available', (v) => v !== 'No'],
     ['secured_unsecured', (v) => v !== 'Unsecured'],
   ],
@@ -48,7 +44,10 @@ export const DEPENDENT_FIELDS: Record<string, [string, (parentValue: string) => 
 
 // Fields removed from the form but still in older meetings' history.
 const REMOVED_LABELS: Record<string, string> = {
-  monthly_surplus: 'Monthly Surplus (₹L)',
-  property_value: 'Property Value (₹L)',
-  existing_mortgage: 'Existing Mortgage',
+  next_visit_date: 'Next Visit Date',
+  likely_product: 'Likely Product',
+  likely_product_other: 'Likely Product (Other)',
+  property_type: 'Property Type',
+  property_type_other: 'Property Type (Other)',
+  property_documents: 'Property Documents Available',
 }

@@ -29,6 +29,9 @@ os.environ["DATABASE_URL"] = _url
 os.environ["JWT_SECRET"] = TEST_SECRET
 os.environ["ZOHO_MCP_URL"] = ""  # tests never talk to the real Zoho
 os.environ["ZOHO_SYNC_ENABLED"] = "false"
+# tests must NEVER send real email, even when the real mail settings are in .env (the environment wins over .env)
+for _name in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM_EMAIL"):
+    os.environ[_name] = ""
 os.environ["GEOCODING_ENABLED"] = "false"  # tests never call a real map service
 os.environ["DEV_AUTO_LOGIN"] = ""  # never skip sign-in in tests unless a test enables it
 
@@ -44,7 +47,7 @@ from app.models import Staff, StaffRole  # noqa: E402
 
 get_settings.cache_clear()
 
-DATA_TABLES = ["audit_log", "meetings", "customers", "staff"]
+DATA_TABLES = ["audit_log", "customer_messages", "follow_ups", "meetings", "customers", "staff"]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -97,9 +100,11 @@ def session_headers(token: str) -> dict[str, str]:
 
 @pytest.fixture
 def make_staff(db):
-    def _make(code: str, role: StaffRole = StaffRole.FIELD_STAFF, active: bool = True):
+    def _make(code: str, role: StaffRole = StaffRole.SM, active: bool = True):
+        digits = "".join(str(ord(ch) % 10) for ch in code).ljust(9, "0")[:9]  # a different mobile per code
         staff = Staff(
-            employee_code=code, full_name=f"Staff {code}", role=role, is_active=active, password_hash=_TEST_HASH
+            full_name=f"Staff {code}", role=role, is_active=active, password_hash=_TEST_HASH,
+            phone="9" + digits, email=f"{code.lower()}@example.com",
         )
         db.add(staff)
         db.commit()

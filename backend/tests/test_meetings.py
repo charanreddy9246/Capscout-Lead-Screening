@@ -6,13 +6,13 @@ GPS_B = {"latitude": 17.440081, "longitude": 78.348915, "accuracy_m": 30, "captu
 
 # 15 fields for meeting 1 (Test 1 in the brief).
 MEETING_1_VALUES = {
-    "source_type": "DSA",
+    "source_type": "Channel Partnership",
     "source_name": "Sri Finance",
     "business_name": "RK Traders",
     "promoter": "Ramesh Kumar",
     "mobile": "9876543210",
     "potential_lender": "Axis Bank",
-    "constitution": "Proprietorship",
+    "constitution": "Sole Proprietorship",
     "industry": "Textiles",
     "vintage_years": "6",
     "loan_required": "25",
@@ -69,7 +69,7 @@ def test_first_and_second_meeting_build_current_state_and_keep_history(client, m
 
     # Meeting 2: 8 new fields + 2 existing fields updated (Test 2).
     m2_values = {
-        "litigation_dispute": "None",
+        "litigation_dispute": "No",
         "existing_debt": "10",
         "monthly_emi": "0.8",
         "gst_available": "Yes",
@@ -96,7 +96,7 @@ def test_first_and_second_meeting_build_current_state_and_keep_history(client, m
     detail = client.get(f"/api/customers/{cid}", headers=a).json()
     assert detail["values"]["monthly_banking"] == "45"
     assert detail["values"]["potential_lender"] == "HDFC Bank"
-    assert detail["progress"]["filled"] == 23  # 15 + 8, of 40
+    assert detail["progress"]["filled"] == 23  # 15 + 8, of 47
     assert detail["meeting_count"] == 2
     assert detail["conversion_status"] == "NOT_CONVERTED"
     assert detail["zoho_lead_id"] is None  # no Zoho Lead before conversion
@@ -273,17 +273,17 @@ def test_new_lead_duplicate_rules(client, make_staff):
     assert detail["values"]["promoter"] == "Ramesh K" and detail["values"]["purpose"] == "Expansion"
 
 
-def test_status_and_litigation_are_free_text_next_action_uses_excel_options(client, make_staff):
+def test_lead_status_and_litigation_are_dropdowns(client, make_staff):
     _, a = make_staff("A1")
     r = _new_lead(
         client, a,
-        {"promoter": "X", "status": "Met owner, positive", "litigation_dispute": "None known",
-         "next_action": "Documents Pending", "next_action_date": "2026-10-08"},
+        {"promoter": "X", "status": "Hot", "litigation_dispute": "No",
+         "next_action": "Document collection", "next_action_date": "2026-10-08"},
     )
     assert r.status_code == 201, r.text
     card = client.get("/api/customers", headers=a).json()["items"][0]
-    assert card["status"] == "Met owner, positive"
-    assert card["next_action"] == "Documents Pending"
+    assert card["status"] == "Hot"
+    assert card["next_action"] == "Document collection"
     assert card["next_action_date"] == "2026-10-08"
 
 
@@ -294,7 +294,10 @@ def test_home_summary_counts(client, make_staff):
     _new_lead(client, a, {"promoter": "Two"})
     _new_lead(client, b, {"promoter": "Other staff"})
     s = client.get("/api/customers/-/summary", headers=a).json()
-    assert s == {"not_converted": 2, "converted": 0, "sync_pending": 2, "sync_failed": 0}
+    assert s == {
+        "follow_ups_today": 0, "overdue": 0,
+        "not_converted": 2, "converted": 0, "sync_pending": 2, "sync_failed": 0,
+    }
 
 
 def test_only_the_promoters_mobile_counts_as_a_duplicate_not_the_source_contact(client, make_staff):
@@ -318,10 +321,18 @@ def test_only_the_promoters_mobile_counts_as_a_duplicate_not_the_source_contact(
     assert r.json()["detail"]["choices"] == ["overwrite", "create_new", "cancel"]
 
 
-def test_progress_total_is_lower_for_direct_customers(client, make_staff):
+def test_progress_total_is_47_when_every_field_applies(client, make_staff):
     _, a = make_staff("A1")
-    cid = _new_customer(client, a, source_type="Direct", promoter="Ramesh")
+    cid = _new_customer(client, a, source_type="Cold Call", promoter="Ramesh")
     detail = client.get(f"/api/customers/{cid}", headers=a).json()
-    assert detail["progress"]["total"] == 38 and detail["progress"]["filled"] == 2  # source type + POC
-    other = _new_customer(client, a, source_type="DSA", promoter="Ramesh")
-    assert client.get(f"/api/customers/{other}", headers=a).json()["progress"]["total"] == 40
+    assert detail["progress"]["total"] == 45 and detail["progress"]["filled"] == 2  # lead source + lead name
+
+
+def test_source_contact_must_be_a_10_digit_mobile_number(client, make_staff):
+    _, a = make_staff("A1")
+    ok = _new_lead(client, a, {"promoter": "Asha", "source_contact": "+91 98765 43210"})
+    assert ok.status_code == 201
+    cid = ok.json()["customer_id"]
+    assert client.get(f"/api/customers/{cid}", headers=a).json()["values"]["source_contact"] == "9876543210"
+    bad = _new_lead(client, a, {"promoter": "Ravi", "source_contact": "12345"})
+    assert bad.status_code == 422 and "source_contact" in bad.json()["detail"]["errors"]

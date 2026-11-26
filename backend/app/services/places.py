@@ -58,14 +58,19 @@ def _city(a: dict[str, Any]) -> str | None:
     return a.get("city") or a.get("town") or a.get("village") or a.get("municipality") or a.get("state_district")
 
 
-def _locality(a: dict[str, Any]) -> str | None:
-    """The area people know, e.g. "Anna Nagar West", not an administrative ward or zone number."""
+def _block(a: dict[str, Any]) -> str | None:
+    """The smallest named part of the area, e.g. "AB Block" (a ward or zone number is skipped)."""
+    return _clean(a.get("neighbourhood"))
+
+
+def _area(a: dict[str, Any]) -> str | None:
+    """The area people know, e.g. "Anna Nagar", not an administrative ward or zone number."""
     road = a.get("road") or a.get("pedestrian") or a.get("residential")
-    if road and "," in road:  # often "2nd Avenue, Anna Nagar West": the locality follows the street
+    if road and "," in road:  # often "2nd Avenue, Anna Nagar West": the area follows the street
         tail = _clean(road.split(",", 1)[1].strip())
         if tail:
             return tail
-    for key in ("neighbourhood", "suburb", "quarter", "city_district"):
+    for key in ("suburb", "quarter", "city_district"):
         cleaned = _clean(a.get(key))
         if cleaned:
             return cleaned
@@ -82,10 +87,12 @@ def _join(parts: list[str | None]) -> str:
 
 
 def build_place_name(data: dict[str, Any]) -> str | None:
-    """A readable place from a Nominatim answer, e.g. "2nd Avenue, Anna Nagar West, Chennai, Tamil Nadu"."""
+    """A readable place from a Nominatim answer: block, street, area, city, state,
+    e.g. "AB Block, 4th Avenue (Santhi Colony Road), Anna Nagar, Chennai, Tamil Nadu 600040"."""
     a = data.get("address") or {}
     street = a.get("road") or a.get("pedestrian") or a.get("residential")
-    text = _join([street, _locality(a), _city(a), a.get("state")])
+    state = " ".join(x for x in (a.get("state"), a.get("postcode")) if x) or None  # "Tamil Nadu 600040"
+    text = _join([_block(a), street, _area(a), _city(a), state])
     if text:
         return text[:200]
     name = data.get("display_name")
@@ -93,11 +100,8 @@ def build_place_name(data: dict[str, Any]) -> str | None:
 
 
 def build_area_name(data: dict[str, Any]) -> str | None:
-    """A short "Area, city" used as the lead's Location, e.g. "Anna Nagar West, Chennai"."""
-    a = data.get("address") or {}
-    text = _join([_locality(a) or a.get("road"), _city(a)])
-    if text:
-        return text[:120]
+    """The lead's Location (and the Location box on the form): the same address as the meeting's place,
+    with the street, e.g. "AB Block, 4th Avenue (Santhi Colony Road), Anna Nagar, Chennai, Tamil Nadu 600040"."""
     return build_place_name(data)
 
 

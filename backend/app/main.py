@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import auth, customers, geo, meetings, meta
+from app.routers import auth, customers, dashboard, deals, follow_ups, geo, meetings, messages, meta, users
 from app.zoho.worker import SyncWorker
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
@@ -40,9 +40,15 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type"],
     )
     app.include_router(auth.router, prefix="/api")
+    app.include_router(users.public_router, prefix="/api")  # set-password (public: the link is the proof)
+    app.include_router(users.router, prefix="/api")
+    app.include_router(dashboard.router, prefix="/api")
     app.include_router(meta.router, prefix="/api")
     app.include_router(geo.router, prefix="/api")
     app.include_router(customers.router, prefix="/api")
+    app.include_router(follow_ups.router, prefix="/api")
+    app.include_router(deals.router, prefix="/api")
+    app.include_router(messages.router, prefix="/api")
     app.include_router(meetings.router, prefix="/api")
     app.include_router(meetings.new_lead_router, prefix="/api")
 

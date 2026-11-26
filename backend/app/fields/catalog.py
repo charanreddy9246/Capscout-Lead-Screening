@@ -56,8 +56,8 @@ HIDDEN_WHEN: dict[str, list[tuple[str, str]]] = {
     "source_contact": [("source_type", "Direct")],
     # No security offered, or no property: the property questions do not apply.
     "property_available": [("secured_unsecured", "Unsecured")],
-    "property_type": [("property_available", "No"), ("secured_unsecured", "Unsecured")],
-    "property_documents": [("property_available", "No"), ("secured_unsecured", "Unsecured")],
+    "property_value": [("property_available", "No"), ("secured_unsecured", "Unsecured")],
+    "existing_mortgage": [("property_available", "No"), ("secured_unsecured", "Unsecured")],
 }
 
 
@@ -152,6 +152,8 @@ def clean_value(key: str, value: Any) -> Any:
                 raise FieldValueError(key, "must be a 10-digit mobile number")
             return mobile
         case "text" | "long_text":
+            if key == "follow_up_time" and not (isinstance(value, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value.strip())):
+                raise FieldValueError(key, "must be a time (HH:MM)")
             if not isinstance(value, str):
                 raise FieldValueError(key, "must be text")
             text = value.strip()

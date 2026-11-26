@@ -44,14 +44,14 @@ def test_admin_sees_all(client, make_staff):
 
 def test_create_prospect_progress_and_tab(client, make_staff):
     _, a = make_staff("A1")
-    r = _create(client, a, promoter="Ramesh", business_name="RK", mobile="9876543210", source_type="DSA")
+    r = _create(client, a, promoter="Ramesh", business_name="RK", mobile="9876543210", source_type="Cold Call")
     body = r.json()
     assert body["conversion_status"] == "NOT_CONVERTED"
-    assert body["progress"] == {"filled": 4, "total": 40, "percent": 10}
+    assert body["progress"] == {"filled": 4, "total": 45, "percent": 9}
     assert body["lead_ref"] == "MSME-0001"
     sections = {s["key"]: s for s in body["sections"]}
-    assert sections["lead"]["total"] == 7  # 10 fields minus Lead ID, Date, SM Name
-    assert sections["lead"]["filled"] == 4
+    assert sections["lead"]["total"] == 7  # lead source, name, contact, lead name, lead contact, GPS location
+    assert sections["lead"]["filled"] == 3
 
     assert client.get("/api/customers?tab=not_converted", headers=a).json()["total"] == 1
     assert client.get("/api/customers?tab=converted", headers=a).json()["total"] == 0
@@ -157,3 +157,38 @@ def test_overwrite_cannot_target_someone_elses_record(client, make_staff):
     )
     assert r.status_code == 422
     assert client.get(f"/api/customers/{mine['id']}", headers=a).json()["values"]["promoter"] == "Mine"
+
+
+def test_home_tiles_count_prospects_and_leads_together_and_skip_dropped(client, make_staff, db):
+    from app.models import ConversionStatus, Customer
+    from sqlalchemy import select
+
+    _, a = make_staff("A1")
+    _, b = make_staff("B1")
+    ids = {}
+    for name, date_, action in [
+        ("due_today", "2026-11-04", "Document collection"),
+        ("late", "2026-11-01", "Identify bank"),
+        ("future", "2026-11-09", "Login"),
+        ("dropped_late", "2026-10-20", "Login"),
+        ("no_date", None, "Sanction"),
+    ]:
+        values = {"promoter": name, "next_action": action, **({"next_action_date": date_} if date_ else {})}
+        if name == "dropped_late":
+            values["status"] = "Reject"  # a rejected customer is closed: not counted
+        ids[name] = _create(client, a, **values).json()["id"]
+    _create(client, b, promoter="other staff", next_action="Login", next_action_date="2026-11-04")  # not mine
+    # one of the customers is already a Lead: the tiles still count it
+    lead = db.scalar(select(Customer).where(Customer.id == ids["due_today"]))
+    lead.conversion_status = ConversionStatus.CONVERTED
+    db.commit()
+
+    s = client.get("/api/customers/-/summary?today=2026-11-04", headers=a).json()
+    assert (s["follow_ups_today"], s["overdue"]) == (1, 1)  # the dropped one is left out of both
+
+    def names(view):
+        items = client.get(f"/api/customers?view={view}&today=2026-11-04", headers=a).json()["items"]
+        return sorted(i["promoter"] for i in items)
+
+    assert names("followups") == ["due_today"]  # a Lead
+    assert names("overdue") == ["late"]  # a prospect

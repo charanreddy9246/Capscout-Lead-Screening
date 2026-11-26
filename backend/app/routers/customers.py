@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import enum
 import uuid
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import selectinload
 
-from app.access import get_visible_customer, scope_customers
-from app.auth import CurrentStaff, DbSession
+from app.access import get_own_customer, get_visible_customer, scope_customers
+from app.auth import CurrentStaff, DbSession, FieldStaff
 from app.fields.catalog import load_catalog, progress_keys_for
 from app.config import get_settings
-from app.models import ConversionStatus, Customer, FieldDefinition, Meeting, SyncStatus
+from app.models import ConversionStatus, Customer, FieldDefinition, Meeting, StaffRole, SyncStatus
 from app.services.conversion import request_conversion
 from app.zoho import leadform
 from app.services.customers import (
@@ -48,6 +50,30 @@ TAB_STATUSES = {
 }
 
 
+class View(str, enum.Enum):
+    """The tiles on the home screen: prospects AND leads together."""
+
+    FOLLOWUPS = "followups"
+    OVERDUE = "overdue"
+
+
+def _is_open(stmt):
+    """Not closed: Lead Status Reject or Cancelled (or an old Next Action of Dropped) is not counted as open."""
+    action = Customer.current_values["next_action"].astext
+    status_ = Customer.current_values["status"].astext
+    return stmt.where(or_(action.is_(None), action != "Dropped"), or_(status_.is_(None), status_.notin_(("Reject", "Cancelled"))))
+
+
+def _view_filter(stmt, view: View, today: str):
+    stmt = _is_open(stmt)
+    due = Customer.current_values["next_action_date"].astext  # ISO dates compare correctly as text
+    if view == View.FOLLOWUPS:
+        stmt = stmt.where(due == today)
+    elif view == View.OVERDUE:
+        stmt = stmt.where(due.is_not(None), due < today)
+    return stmt
+
+
 class CreateProspect(BaseModel):
     values: dict[str, Any]
     on_duplicate: OnDuplicate = OnDuplicate.ASK
@@ -64,6 +90,7 @@ def _card(c: Customer) -> dict[str, Any]:
     return {
         "id": str(c.id),
         "lead_ref": c.lead_ref,
+        "owner_name": c.owner.full_name if c.owner else None,  # so an Admin sees whose customer it is
         "business_name": vals.get("business_name"),
         "promoter": vals.get("promoter"),
         "mobile": vals.get("mobile"),
@@ -73,6 +100,7 @@ def _card(c: Customer) -> dict[str, Any]:
         "purpose": vals.get("purpose"),
         "opportunity_grade": vals.get("opportunity_grade"),
         "status": vals.get("status"),
+        "loan_stage": vals.get("next_action") if c.conversion_status == ConversionStatus.CONVERTED else None,  # a lead's Next Action is its stage
         "next_action": vals.get("next_action"),
         "next_action_date": vals.get("next_action_date"),
         "conversion_status": c.conversion_status.value,
@@ -111,17 +139,27 @@ def list_customers(
     staff: CurrentStaff,
     db: DbSession,
     tab: Tab = Tab.NOT_CONVERTED,
+    view: View | None = None,
+    staff_id: uuid.UUID | None = None,  # an Admin looking at one SM's customers
+    mine: bool = False,  # an Admin: only the customers they own
+    today: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     q: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
-    stmt = scope_customers(select(Customer).where(Customer.conversion_status.in_(TAB_STATUSES[tab])), staff)
+    if view is not None:  # a home-screen tile: prospects and leads together
+        stmt = _view_filter(scope_customers(select(Customer), staff, mine), view, today or date.today().isoformat())
+    else:
+        stmt = scope_customers(select(Customer).where(Customer.conversion_status.in_(TAB_STATUSES[tab])), staff, mine)
     if q and q.strip():
         pattern = f"%{q.strip()}%"
         stmt = stmt.where(or_(*(Customer.current_values[k].astext.ilike(pattern) for k in SEARCH_KEYS)))
+    if staff_id is not None and staff.role != StaffRole.SM:
+        stmt = stmt.where(Customer.owner_staff_id == staff_id)
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     rows = db.scalars(
-        stmt.order_by(Customer.last_meeting_at.desc().nulls_last(), Customer.created_at.desc())
+        stmt.options(selectinload(Customer.owner))
+        .order_by(Customer.last_meeting_at.desc().nulls_last(), Customer.created_at.desc())
         .limit(limit)
         .offset(offset)
     ).all()
@@ -129,11 +167,16 @@ def list_customers(
 
 
 @router.get("/-/summary")
-def summary_counts(staff: CurrentStaff, db: DbSession) -> dict:
+def summary_counts(
+    staff: CurrentStaff,
+    db: DbSession,
+    mine: bool = False,
+    today: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+) -> dict:
     """Header numbers for the home screen: tab counts and Zoho sync state."""
     by_status = dict(
         db.execute(
-            scope_customers(select(Customer.conversion_status, func.count()).select_from(Customer), staff).group_by(
+            scope_customers(select(Customer.conversion_status, func.count()).select_from(Customer), staff, mine).group_by(
                 Customer.conversion_status
             )
         ).all()
@@ -141,11 +184,18 @@ def summary_counts(staff: CurrentStaff, db: DbSession) -> dict:
     sync = dict(
         db.execute(
             scope_customers(
-                select(Meeting.zoho_sync_status, func.count()).select_from(Meeting).join(Customer), staff
+                select(Meeting.zoho_sync_status, func.count()).select_from(Meeting).join(Customer), staff, mine
             ).group_by(Meeting.zoho_sync_status)
         ).all()
     )
+    day = today or date.today().isoformat()
+
+    def count(view: View) -> int:
+        return db.scalar(select(func.count()).select_from(_view_filter(scope_customers(select(Customer), staff, mine), view, day).subquery())) or 0
+
     return {
+        "follow_ups_today": count(View.FOLLOWUPS),
+        "overdue": count(View.OVERDUE),
         "not_converted": sum(by_status.get(s, 0) for s in TAB_STATUSES[Tab.NOT_CONVERTED]),
         "converted": by_status.get(ConversionStatus.CONVERTED, 0),
         "sync_pending": sync.get(SyncStatus.PENDING, 0) + sync.get(SyncStatus.SYNCING, 0),
@@ -153,56 +203,8 @@ def summary_counts(staff: CurrentStaff, db: DbSession) -> dict:
     }
 
 
-class NewLeadIn(BaseModel):
-    lead_values: dict[str, Any]
-
-
-@router.get("/-/lead-form")
-async def new_lead_form(staff: CurrentStaff) -> dict:
-    """The blank Zoho Lead form, for "New lead" (a lead entered directly, with no meeting first)."""
-    fields = await _zoho_form_fields()
-    return {"customer": None, "fields": [{**f, "value": None, "prefilled_from": None} for f in fields]}
-
-
-@router.post("/-/new-lead")
-async def new_lead(body: NewLeadIn, staff: CurrentStaff, db: DbSession):
-    """Create the customer from the Zoho Lead form and convert it straight away (no meeting)."""
-    fields = await _zoho_form_fields()
-    clean, errors = leadform.validate(fields, body.lead_values)
-    if errors:
-        raise HTTPException(status_code=422, detail={"code": "INVALID_VALUES", "errors": errors})
-    name = " ".join(str(clean[k]) for k in ("First_Name", "Last_Name") if clean.get(k))
-    values = {
-        "promoter": name,
-        "business_name": clean.get("Company"),
-        "mobile": clean.get("Mobile") or clean.get("Phone"),
-    }
-    try:
-        customer, _ = create_prospect(db, staff, {k: v for k, v in values.items() if v})
-    except InvalidValues as e:
-        db.rollback()
-        labels = {"promoter": "Last_Name", "business_name": "Company", "mobile": "Mobile"}
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "INVALID_VALUES", "errors": {labels.get(k, k): m for k, m in e.errors.items()}},
-        ) from None
-    except DuplicateOtherStaff:
-        raise HTTPException(
-            status_code=409, detail={"code": "ASSIGNED_TO_OTHER_STAFF", "message": OTHER_STAFF_MESSAGE}
-        ) from None
-    except DuplicateOwn:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "DUPLICATE_OWN", "message": "A customer with this mobile number already exists."},
-        ) from None
-    request_conversion(db, staff, customer, clean)
-    db.refresh(customer)
-    return _detail(customer)
-
-
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_customer(body: CreateProspect, staff: CurrentStaff, db: DbSession):
+def create_customer(body: CreateProspect, staff: FieldStaff, db: DbSession):
     try:
         customer, created = create_prospect(db, staff, body.values, body.on_duplicate, body.overwrite_customer_id)
     except InvalidValues as e:
@@ -272,9 +274,9 @@ def _db_mapping(db) -> dict[str, str]:
 
 
 @router.get("/{customer_id}/convert-form")
-async def convert_form(customer_id: uuid.UUID, staff: CurrentStaff, db: DbSession) -> dict:
+async def convert_form(customer_id: uuid.UUID, staff: FieldStaff, db: DbSession) -> dict:
     """The "Convert to Lead" form: Zoho's own Lead fields, pre-filled from what the app collected."""
-    customer = get_visible_customer(db, staff, customer_id)
+    customer = get_own_customer(db, staff, customer_id)
     fields = await _zoho_form_fields()
     return {
         "customer": {"id": str(customer.id), "lead_ref": customer.lead_ref, "name": (customer.current_values or {}).get("business_name") or (customer.current_values or {}).get("promoter")},
@@ -283,13 +285,13 @@ async def convert_form(customer_id: uuid.UUID, staff: CurrentStaff, db: DbSessio
 
 
 @router.post("/{customer_id}/convert")
-async def convert_to_lead(customer_id: uuid.UUID, staff: CurrentStaff, db: DbSession, body: ConvertIn | None = None):
+async def convert_to_lead(customer_id: uuid.UUID, staff: FieldStaff, db: DbSession, body: ConvertIn | None = None):
     """Explicit "Convert to Lead" action (after the user confirms the form on the phone).
 
     Sets the customer to CONVERTING; the Zoho Lead is created by the sync
     worker with the confirmed values, which then sets CONVERTED. Safe to repeat.
     """
-    customer = get_visible_customer(db, staff, customer_id)
+    customer = get_own_customer(db, staff, customer_id)
     clean = None
     if body is not None and body.lead_values is not None:
         fields = await _zoho_form_fields()

@@ -2,15 +2,15 @@
    restyled: a light, airy palette, one modern typeface (Inter), soft shadows and more space. */
 
 :root {
-  --navy: #12263a;
-  --ink: #1b2a38;
-  --muted: #556372;
-  --line: #d5dbe1;
-  --ground: #f7f6f2;
+  --navy: #172b45;
+  --ink: #172b45;
+  --muted: #6b7685;
+  --line: #e3e8ef; /* the border colour */
+  --ground: #ffffff;
   --amber: #f2a93b;
   --amber-deep: #e8961a;
-  --shadow-sm: 0 1px 2px rgba(18, 38, 58, 0.06), 0 1px 3px rgba(18, 38, 58, 0.04);
-  --shadow-md: 0 4px 14px rgba(18, 38, 58, 0.08);
+  --shadow-sm: none; /* thin borders, not shadows */
+  --shadow-md: none;
   --good: #1f6f4a;
   --warn: #9a3412;
   --bad: #9f1d1d;
@@ -66,7 +66,6 @@ a {
 .app {
   width: 390px;
   height: 844px;
-  zoom: var(--fit, 1); /* shrinks evenly on short windows, see main.tsx */
   background: var(--ground);
   display: flex;
   flex-direction: column;
@@ -74,6 +73,7 @@ a {
   border-radius: 28px;
   box-shadow: 0 20px 60px rgba(18, 38, 58, 0.25);
   position: relative;
+  zoom: var(--fit, 1); /* shrinks evenly on short windows, see main.tsx */
 }
 @media (max-width: 500px) {
   body {
@@ -215,7 +215,7 @@ a {
   font-weight: 600;
 }
 .tri {
-  width: 64px;
+  width: 58px;
   height: 42px;
   padding: 0;
   border-radius: 10px;
@@ -237,7 +237,7 @@ a {
 }
 .card {
   background: #fff;
-  border: 1px solid #e4e8ec;
+  border: 1px solid #e3e8ef;
   border-radius: 16px;
   box-shadow: var(--shadow-sm);
   padding: 0 14px;
@@ -815,4 +815,725 @@ a {
   font-size: 13px;
   line-height: 1.4;
   color: var(--muted);
+}
+
+/* Dropdown list (components/widgets.tsx): a field that opens a short scrollable list. */
+.dd {
+  position: relative;
+}
+.dd-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+}
+.dd-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dd-ph {
+  color: var(--muted);
+}
+.dd-panel {
+  position: absolute;
+  z-index: 15;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin-top: 6px;
+  max-height: 264px; /* about five rows, then it scrolls */
+  overflow-y: auto;
+  background: #fffaf0;
+  border: 1px solid #ecdfc4;
+  border-radius: 14px;
+  box-shadow: 0 14px 30px rgba(18, 38, 58, 0.2);
+  overscroll-behavior: contain;
+}
+.dd-panel.up {
+  top: auto;
+  bottom: 100%;
+  margin: 0 0 6px;
+}
+.dd-item {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 16px;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid #f0e6d0;
+  background: transparent;
+  color: var(--navy);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.dd-item:last-child {
+  border-bottom: none;
+}
+.dd-item:hover {
+  background: #fbebc9;
+}
+.dd-item.sel {
+  font-weight: 800; /* the chosen option is just bold, no coloured bar */
+}
+
+/* Step bar on the meeting form: numbered circles joined by a line. Every step can be tapped. */
+.steps {
+  display: flex;
+}
+.step {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 56px; /* a comfortable tap area, bigger than the circle */
+  padding: 0;
+  border: none;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  color: #7d8b99;
+}
+.step::before {
+  /* the line coming in from the previous step */
+  content: '';
+  position: absolute;
+  top: 14px;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: #d5dbe1;
+}
+.step:first-child::before {
+  display: none;
+}
+.step.done::before,
+.step.cur::before {
+  background: #2f8f62;
+}
+.step-dot {
+  position: relative; /* above the line */
+  z-index: 1;
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  background: #e3e8ed;
+  color: #6b7886;
+}
+.step.done .step-dot {
+  background: #2f8f62;
+  color: #fff;
+}
+.step.cur .step-dot {
+  background: #ee8e0b;
+  color: #fff;
+  box-shadow: 0 0 0 4px rgba(238, 142, 11, 0.22);
+}
+.step-name {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.step.cur .step-name,
+.step.done .step-name {
+  color: var(--navy);
+}
+.step.cur .step-name {
+  font-weight: 800;
+}
+
+/* ===== Calm pass (2026-11-02): white page, thin borders, no shadows, smaller corners, one orange accent ===== */
+body {
+  background: #eef1f5; /* only visible around the phone frame on a computer */
+}
+@media (max-width: 500px) {
+  body {
+    background: #fff;
+  }
+}
+.app {
+  background: #fff;
+  box-shadow: 0 12px 40px rgba(23, 43, 69, 0.12);
+}
+.hdr {
+  background: #fff;
+}
+.scroll {
+  gap: 16px;
+}
+.lbl {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #4b5767;
+  letter-spacing: 0;
+}
+.h {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* inputs: thin border, same height and radius everywhere */
+.fld,
+.box {
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+}
+.fld:focus,
+.box:focus-within {
+  border-color: var(--navy);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(23, 43, 69, 0.1);
+}
+.chip,
+.sg,
+.tri {
+  border: 1px solid var(--line);
+  box-shadow: none;
+  border-radius: 10px;
+}
+.chip {
+  height: 40px;
+}
+.on {
+  box-shadow: none;
+}
+.card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: none;
+}
+.row {
+  min-height: 56px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+/* buttons: flat */
+.btn {
+  height: 52px;
+  border-radius: 12px;
+}
+.primary {
+  background: var(--amber);
+  box-shadow: none;
+}
+.primary:active:not(:disabled) {
+  box-shadow: none;
+}
+.ghost {
+  border: 1px solid #c9d1da;
+}
+.foot {
+  background: #fff;
+  box-shadow: none;
+  border-top: 1px solid var(--line);
+}
+
+/* lists and home screen */
+.lead {
+  border: 1.5px solid #e3e8ef;
+  border-radius: 12px;
+  box-shadow: none;
+}
+.lead-grid {
+  gap: 12px;
+}
+.mtype {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: none;
+}
+.hdr-pill {
+  box-shadow: none;
+}
+.box.search {
+  border: 1px solid #c9d1da;
+  box-shadow: none;
+}
+.box.search:focus-within {
+  border-color: var(--navy);
+  box-shadow: 0 0 0 3px rgba(23, 43, 69, 0.1);
+}
+.pillseg {
+  border-radius: 12px;
+}
+.pillseg button {
+  border-radius: 12px;
+  height: 46px;
+}
+.pillseg button.on {
+  box-shadow: none;
+}
+.sub {
+  box-shadow: none;
+}
+.sub.on {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--amber);
+}
+
+/* dropdown list */
+.dd-panel {
+  border-radius: 10px;
+  box-shadow: 0 6px 16px rgba(23, 43, 69, 0.1);
+}
+.sheet {
+  box-shadow: 0 -6px 20px rgba(23, 43, 69, 0.12);
+}
+
+/* step bar: smaller and quieter */
+.step-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+.step::before {
+  top: 12px;
+}
+.step.cur .step-dot {
+  box-shadow: none;
+}
+.step {
+  min-height: 52px;
+}
+
+/* GPS shown as a small inline line, not a boxed field */
+.gps-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 2px;
+  border-top: 1px solid var(--line);
+}
+.gps-line .gps-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--navy);
+}
+.gps-line .gps-text.muted {
+  color: var(--muted);
+}
+.gps-refresh {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ===== Layout system (2026-11-02): one grid, one control height, one radius, clear sections ===== */
+
+/* the header lines up with the page below it */
+.hdr {
+  padding-left: 18px !important;
+  padding-right: 18px !important;
+}
+.hdr .icon-btn:first-child {
+  margin-left: -12px;
+}
+
+/* page heading */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.page-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--navy);
+  line-height: 1.2;
+}
+.page-sub {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* sections: a thin line above, the same space before and after */
+.scroll {
+  gap: 14px;
+}
+.group {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.group .h {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* read-only facts at the top of page 1 */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  padding: 14px 16px;
+  background: #f4f6f9; /* a lighter tint of the border colour */
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+}
+
+/* every choice sits on one equal-width grid */
+.opts {
+  display: grid;
+  gap: 8px;
+}
+.opts .chip,
+.opts .sg {
+  width: 100%;
+  height: 46px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+/* one control height, one radius */
+.fld,
+.box {
+  height: 48px;
+  border-radius: 10px;
+}
+.tri {
+  width: 60px;
+  height: 38px;
+  border-radius: 8px;
+}
+.row .t {
+  font-size: 14px;
+  font-weight: 500;
+}
+.lbl {
+  margin-bottom: 6px;
+}
+.g2 {
+  gap: 12px;
+  align-items: start;
+}
+
+/* a mobile number box: the +91 and all 10 digits fit in a half-width box */
+.mobile-box {
+  padding: 0 10px;
+  gap: 5px;
+}
+.mobile-box input {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* GPS address: one line that scrolls sideways; tapping it opens the whole address */
+.gps-text {
+  white-space: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  cursor: pointer;
+  padding: 7px 0;
+}
+.gps-text::-webkit-scrollbar {
+  display: none;
+}
+.gps-text.open {
+  white-space: normal;
+  overflow-x: visible;
+}
+.gps-line {
+  align-items: center;
+}
+
+/* edge fades + an arrow: the GPS address has more to the right / left */
+.gps-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.gps-text.fade-r {
+  -webkit-mask-image: linear-gradient(to right, #000 78%, transparent);
+  mask-image: linear-gradient(to right, #000 78%, transparent);
+}
+.gps-text.fade-l {
+  -webkit-mask-image: linear-gradient(to left, #000 78%, transparent);
+  mask-image: linear-gradient(to left, #000 78%, transparent);
+}
+.gps-text.fade-l.fade-r {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 12%, #000 78%, transparent);
+  mask-image: linear-gradient(to right, transparent, #000 12%, #000 78%, transparent);
+}
+.gps-more {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-52%);
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--navy);
+  pointer-events: none;
+}
+
+/* the page title (and page 1's facts) stay put; only the fields scroll */
+.page-fixed {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 18px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+.scroll {
+  padding-top: 16px;
+}
+
+/* a clear gap between the parts of a page: a zero-height spacer picks up the flex gap on both sides */
+.sec-gap {
+  height: 0;
+  margin: 4px 0;
+}
+
+/* ===== Bolder outlines on fields: 2px (browsers round 1.5px down to 1px, so it must be a whole pixel) ===== */
+:root {
+  --field-line: #cdd5e0;
+}
+.fld,
+.box,
+.chip,
+.sg,
+.tri,
+.gps-refresh,
+.opts .chip,
+.opts .sg,
+.card {
+  border-width: 2px;
+  border-color: var(--field-line);
+}
+.row {
+  border-bottom-color: #e3e8ef;
+}
+.box.search {
+  border: 2px solid #b9c3d0;
+}
+/* selected and focused keep their strong navy outline */
+.on,
+.opts .on {
+  border-color: var(--navy);
+}
+.fld:focus,
+.box:focus-within {
+  border-color: var(--navy);
+  box-shadow: 0 0 0 3px rgba(23, 43, 69, 0.1);
+}
+
+/* the three tiles on the home screen are buttons */
+.tile {
+  text-align: left;
+  background: #fff;
+  color: var(--navy);
+  border: 2px solid var(--field-line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.tile.hi {
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.tile.active {
+  border-color: var(--navy);
+}
+.view-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Follow-ups / Overdue: a bold heading above each group (Meetings, then Leads) */
+.list-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.list-section + .list-section {
+  margin-top: 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.list-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--navy);
+}
+.list-count {
+  min-width: 24px;
+  padding: 1px 8px;
+  border-radius: 12px;
+  background: #e8ecf2;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* ===== Dashboard and user management ===== */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.stat {
+  padding: 14px 16px;
+  border: 2px solid var(--field-line);
+  border-radius: 12px;
+  background: #fff;
+}
+.stat-n {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--navy);
+  line-height: 1.1;
+}
+.stat-l {
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.stat.warn {
+  border-color: #e9b9a3;
+  background: #fff7f3;
+}
+.stat.warn .stat-n {
+  color: var(--warn);
+}
+.pipeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bar-row {
+  display: grid;
+  grid-template-columns: 118px 1fr 30px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.bar-label {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bar-track {
+  height: 10px;
+  border-radius: 5px;
+  background: #e8ecf2;
+  overflow: hidden;
+}
+.bar-track span {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--navy);
+}
+.bar-n {
+  text-align: right;
+  color: var(--navy);
+}
+.member-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.member-stats b {
+  color: var(--navy);
+}
+.member-stats .bad,
+.member-stats .bad b {
+  color: var(--warn);
+}
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* the bottom menu, the same for every role */
+.tabbar {
+  flex: none;
+  display: flex;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+.tabbar button {
+  flex: 1;
+  height: 52px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tabbar button.on {
+  color: var(--navy);
+  font-weight: 800;
+  box-shadow: inset 0 -3px 0 var(--accent, #f5a93a);
+}
+
+.tab-badge {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--warn);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 700;
+  vertical-align: top;
+}
+.tabbar button {
+  font-size: 13px;
 }

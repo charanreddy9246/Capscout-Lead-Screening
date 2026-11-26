@@ -68,9 +68,9 @@ class Timestamped:
 
 
 class StaffRole(str, enum.Enum):
-    FIELD_STAFF = "FIELD_STAFF"
-    SUPERVISOR = "SUPERVISOR"  # team view is a future improvement
-    ADMIN = "ADMIN"
+    SM = "SM"  # a sales manager: sees only their own customers and meetings
+    ADMIN = "ADMIN"  # manages SMs; sees every SM's data and dashboard
+    SUPER_ADMIN = "SUPER_ADMIN"  # the developer: sees everything an Admin sees, and creates and manages Admins
 
 
 class FieldType(str, enum.Enum):
@@ -101,6 +101,11 @@ class GpsStatus(str, enum.Enum):
     UNAVAILABLE = "UNAVAILABLE"  # saved without GPS; reason is mandatory
 
 
+class FollowUpStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    DONE = "DONE"
+
+
 class SyncStatus(str, enum.Enum):
     NOT_QUEUED = "NOT_QUEUED"
     PENDING = "PENDING"
@@ -116,10 +121,12 @@ class Staff(Timestamped, Base):
     __tablename__ = "staff"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    employee_code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)  # stored upper-case
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)  # argon2
+    # Sign-in is: employee code OR email, plus the 10-digit mobile, plus the password.
+    email: Mapped[str] = mapped_column(String(254), unique=True, nullable=False)  # stored lower-case; how a person signs in
+    phone: Mapped[str | None] = mapped_column(String(10), unique=True)  # 10 digits
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)
-    role: Mapped[StaffRole] = mapped_column(_enum(StaffRole), nullable=False, default=StaffRole.FIELD_STAFF)
+    role: Mapped[StaffRole] = mapped_column(_enum(StaffRole), nullable=False, default=StaffRole.SM)
     # Set when the staff member has their own Zoho login; otherwise records are
     # owned by the integration user in Zoho.
     zoho_user_id: Mapped[str | None] = mapped_column(String(64))
@@ -185,6 +192,8 @@ class Customer(Timestamped, Base):
 
     # Zoho Lead sync (only used once conversion starts).
     zoho_lead_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    # The Zoho Deal this lead became (found by asking Zoho; the deal itself is only ever read from Zoho).
+    zoho_deal_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     # The Zoho Lead form exactly as the staff member confirmed it ({zoho_api_name: value}).
     # The sync sends this when creating the Lead; if empty it builds a default one.
     zoho_lead_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
@@ -265,3 +274,51 @@ class AuditLog(Base):
     entity_id: Mapped[str | None] = mapped_column(String(64))
     details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+# --- 6. follow_ups ----------------------------------------------------------------
+
+
+class FollowUp(Timestamped, Base):
+    """One planned contact with a customer. A customer can have many over time; the history is kept.
+
+    `purpose` is the Next Action label. The earliest PENDING one is mirrored into the customer's
+    current values (next_action / next_action_date) so the home-screen tiles and Zoho keep working.
+    """
+
+    __tablename__ = "follow_ups"
+    __table_args__ = (Index("ix_follow_ups_status_due", "status", "due_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
+    staff_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("staff.id"), nullable=False, index=True)  # who must do it
+    meeting_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("meetings.id"))  # the meeting that planned it
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    purpose: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[FollowUpStatus] = mapped_column(_enum(FollowUpStatus), nullable=False, default=FollowUpStatus.PENDING)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # the daily visit plan: a priority flag, and a manual place in that day's order (None = by time)
+    is_priority: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    sort_order: Mapped[int | None] = mapped_column(Integer)
+
+    customer: Mapped[Customer] = relationship(foreign_keys=[customer_id])
+
+
+# --- 7. customer_messages ---------------------------------------------------------
+
+
+class CustomerMessage(Base):
+    """A message an SM sent (or copied) to a customer: kept as a record of what was said and when."""
+
+    __tablename__ = "customer_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
+    staff_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("staff.id"), nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)  # WHATSAPP, SMS, COPY
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    staff: Mapped[Staff] = relationship(foreign_keys=[staff_id])
+

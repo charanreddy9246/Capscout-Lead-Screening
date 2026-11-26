@@ -10,7 +10,7 @@ router = APIRouter(tags=["meta"])
 def staff_out(staff: Staff) -> dict:
     return {
         "id": str(staff.id),
-        "employee_code": staff.employee_code,
+        "email": staff.email,
         "full_name": staff.full_name,
         "role": staff.role.value,
     }

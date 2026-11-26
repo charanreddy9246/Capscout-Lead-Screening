@@ -9,21 +9,22 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class LoginIn(BaseModel):
-    employee_code: str = Field(min_length=1, max_length=32)
+    username: str = Field(min_length=1, max_length=254)  # employee code or email
+    phone: str = Field(min_length=1, max_length=30)
     password: str = Field(min_length=1, max_length=200)
 
 
 @router.post("/login")
 def login(body: LoginIn, request: Request, response: Response, db: DbSession) -> dict:
     try:
-        staff = authenticate(db, body.employee_code, body.password, request)
+        staff = authenticate(db, body.username, body.phone, body.password, request)
     except LoginLocked:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many wrong attempts. Try again in 15 minutes.",
         ) from None
     if staff is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Wrong employee code or password")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Wrong sign-in details")
 
     settings = get_settings()
     response.set_cookie(

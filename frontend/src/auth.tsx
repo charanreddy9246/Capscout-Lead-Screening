@@ -4,7 +4,7 @@ import { api, ApiError, post, type Staff } from './api'
 type AuthState = {
   staff: Staff | null
   loading: boolean
-  login: (employeeCode: string, password: string) => Promise<void>
+  login: (username: string, phone: string, password: string) => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -23,8 +23,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false))
   }, [])
 
-  const login = useCallback(async (employeeCode: string, password: string) => {
-    setStaff(await post<Staff>('/auth/login', { employee_code: employeeCode, password }))
+  const login = useCallback(async (username: string, phone: string, password: string) => {
+    setStaff(await post<Staff>('/auth/login', { username, phone, password }))
   }, [])
 
   const logout = useCallback(async () => {

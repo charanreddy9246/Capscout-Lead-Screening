@@ -46,11 +46,13 @@ export const post = <T>(path: string, data?: unknown) =>
 
 // --- types returned by the backend ------------------------------------------
 
+export type Role = 'SM' | 'ADMIN' | 'SUPER_ADMIN'
+
 export type Staff = {
   id: string
-  employee_code: string
+  email: string
   full_name: string
-  role: 'FIELD_STAFF' | 'SUPERVISOR' | 'ADMIN'
+  role: Role
 }
 
 export type Progress = { filled: number; total: number; percent: number }
@@ -61,6 +63,8 @@ export type CustomerCard = {
   id: string
   lead_ref: string
   business_name: string | null
+  owner_name?: string | null
+  loan_stage?: string | null
   promoter: string | null
   mobile: string | null
   location: string | null
@@ -151,7 +155,15 @@ export type Meeting = {
   zoho_last_error: string | null
 }
 
-export type HomeSummary = { not_converted: number; converted: number; sync_pending: number; sync_failed: number }
+export type HomeSummary = {
+  // the two home-screen tiles: prospects AND leads together, not counting Dropped
+  follow_ups_today: number
+  overdue: number
+  not_converted: number
+  converted: number
+  sync_pending: number
+  sync_failed: number
+}
 
 // --- the "Convert to Lead" form: Zoho's own Lead fields -----------------------------------
 
@@ -180,6 +192,96 @@ export type ZohoFormField = {
 }
 
 export type ConvertForm = {
-  customer: { id: string; lead_ref: string; name: string | null } | null
+  customer: { id: string; lead_ref: string; name: string | null }
   fields: ZohoFormField[]
 }
+
+// --- dashboard and user management -------------------------------------------------------------
+
+export type DashboardTotals = {
+  meetings: number
+  new_prospects: number
+  leads_converted: number
+  follow_ups_today: number
+  overdue: number
+  no_gps: number
+  sync_failed: number
+  open_customers: number
+}
+
+export type DashboardMember = {
+  id: string
+  full_name: string
+  meetings: number
+  new_prospects: number
+  leads_converted: number
+  overdue: number
+  no_gps: number
+  last_meeting_at: string | null
+}
+
+export type DashboardData = {
+  scope: 'me' | 'team' | 'person'
+  person: { id: string; full_name: string } | null
+  period: { key: 'today' | 'week' | 'month'; days: number }
+  totals: DashboardTotals
+  pipeline: { label: string; count: number }[]
+  lead_stages: { label: string; count: number }[]
+  members?: DashboardMember[]
+}
+
+export type FollowUp = {
+  id: string
+  customer: {
+    id: string
+    business_name: string | null
+    promoter: string | null
+    mobile: string | null
+    loan_stage: string | null
+    converted: boolean
+    owner_name: string | null
+  }
+  due_at: string
+  purpose: string | null
+  status: 'PENDING' | 'DONE'
+  outcome: string | null
+  completed_at: string | null
+  when: 'overdue' | 'today' | 'upcoming' | 'done'
+}
+export type FollowUpList = { items: FollowUp[]; counts: { overdue: number; today: number; upcoming: number } }
+
+export type MessageDraft = { text: string; mobile: string | null; next_action: string | null }
+export type SentMessage = { id: string; channel: 'WHATSAPP' | 'SMS' | 'COPY'; body: string; sent_at: string; by: string | null }
+
+// A Zoho deal, read-only: the operations team changes it in Zoho, never here.
+export type Deal = {
+  id: string
+  name: string | null
+  amount: number | null
+  stage: string | null
+  closing_date: string | null
+  next_step: string | null
+  owner: string | null
+  modified_at: string | null
+}
+export type DealItem = {
+  customer_id: string
+  business_name: string | null
+  promoter: string | null
+  mobile: string | null
+  sm_name: string | null
+  deal: Deal
+}
+export type DealList = { items: DealItem[]; zoho: boolean }
+
+export type UserRow = {
+  id: string
+  full_name: string
+  email: string
+  phone: string | null
+  role: Role
+  is_active: boolean
+  manageable: boolean
+}
+
+export type Invite = { token: string; path: string; valid_hours: number; email?: { sent: boolean; to: string | null; error: string | null } }

@@ -6,6 +6,9 @@
 // Add ?reset=1 to the address to go back to the original sample data.
 
 import type {
+  Role,
+  DashboardData,
+  Invite,
   ConversionStatus,
   ConvertForm,
   CustomerCard,
@@ -58,7 +61,29 @@ const CATALOG: FieldCatalog = {
   })),
 }
 
-const STAFF: Staff = { id: 'demo-staff-ravi', employee_code: 'DEV001', full_name: 'Ravi Kumar', role: 'FIELD_STAFF' }
+const STAFF: Staff = { id: 'demo-staff-ravi', email: 'ravi@example.com', full_name: 'Ravi Kumar', role: 'SM' }
+
+// In the demo the username picks the role: "super..." is the Super Admin, "admin..." an Admin, anything else an SM.
+const staffFor = (d: Db): Staff =>
+  d.role === 'SUPER_ADMIN'
+    ? { id: 'demo-super', email: 'super@example.com', full_name: 'Developer', role: 'SUPER_ADMIN' }
+    : d.role === 'ADMIN'
+      ? { id: 'demo-admin', email: 'asha@example.com', full_name: 'Asha Menon', role: 'ADMIN' }
+      : STAFF
+
+type DUser = { id: string; full_name: string; email: string; phone: string | null; role: Role; is_active: boolean }
+const seedUsers = (): DUser[] => [
+  { id: 'demo-staff-ravi', full_name: 'Ravi Kumar', email: 'ravi@example.com', phone: '9000000001', role: 'SM', is_active: true },
+  { id: 'u-priya', full_name: 'Priya Sharma', email: 'priya@example.com', phone: '9000000002', role: 'SM', is_active: true },
+  { id: 'u-karthik', full_name: 'Karthik N', email: 'karthik@example.com', phone: '9000000003', role: 'SM', is_active: true },
+  { id: 'demo-admin', full_name: 'Asha Menon', email: 'asha@example.com', phone: '9000000010', role: 'ADMIN', is_active: true },
+  { id: 'u-admin2', full_name: 'Vikram Rao', email: 'vikram@example.com', phone: '9000000011', role: 'ADMIN', is_active: true },
+]
+// The two other sales managers' numbers are fixed sample values; Ravi's are worked out from his sample customers.
+const OTHER_SMS: Record<string, { meetings: number; new_prospects: number; leads_converted: number; overdue: number; no_gps: number; last_h: number | null }> = {
+  'u-priya': { meetings: 14, new_prospects: 6, leads_converted: 3, overdue: 1, no_gps: 0, last_h: 5 },
+  'u-karthik': { meetings: 9, new_prospects: 4, leads_converted: 1, overdue: 3, no_gps: 2, last_h: 52 },
+}
 const CONVERT_SECONDS = 4
 const SYNC_SECONDS = 3
 const PLACE_SECONDS = 2.5
@@ -79,6 +104,7 @@ type DMeeting = {
 }
 
 type DCustomer = {
+  owner?: Role // who owns it: an SM unless an Admin or Super Admin recorded it
   id: string
   ref_no: number
   values: Record<string, string>
@@ -90,7 +116,11 @@ type DCustomer = {
   meetings: DMeeting[]
 }
 
-type Db = { v: 1; next_ref: number; signed_in: boolean; customers: DCustomer[] }
+type DFollowUp = { id: string; customer_id: string; due_at: string; purpose: string | null; status: 'PENDING' | 'DONE'; outcome: string | null; completed_at: string | null }
+
+type DMessage = { id: string; customer_id: string; channel: string; body: string; sent_at: string; by: string }
+
+type Db = { v: 1; messages?: DMessage[]; next_ref: number; signed_in: boolean; role?: Role; users?: DUser[]; customers: DCustomer[]; followUps?: DFollowUp[] }
 
 const KEY = 'capscout-demo-db-v2' // bumped when the sample data changed, so old browsers get the new data
 let db: Db | null = null
@@ -164,6 +194,14 @@ function addMeeting(c: DCustomer, input: MeetingInput, opts: { createdMs?: numbe
     failed: opts.failed ?? false,
   }
   c.meetings.push(meeting)
+  // A meeting that sets or clears the Next Action Date replaces the customer's pending follow-ups.
+  if (db && 'next_action_date' in (input.values ?? {})) {
+    const list = fus(db)
+    for (const f of list.filter((x) => x.customer_id === c.id && x.status === 'PENDING')) Object.assign(f, { status: 'DONE', outcome: `Replaced in meeting #${meeting.seq}`, completed_at: new Date().toISOString() })
+    const day = c.values.next_action_date
+    if (day && isOpen(c))
+      list.push({ id: uid(), customer_id: c.id, due_at: new Date(`${day}T${c.values.follow_up_time || '10:00'}:00`).toISOString(), purpose: c.values.next_action ?? null, status: 'PENDING', outcome: null, completed_at: null })
+  }
   // "Proceed" sends the prospect to Leads (the phone asked the user to confirm first).
   if (c.values.sm_recommendation === 'Proceed' && c.status === 'NOT_CONVERTED') {
     c.status = 'CONVERTING'
@@ -172,9 +210,22 @@ function addMeeting(c: DCustomer, input: MeetingInput, opts: { createdMs?: numbe
   return meeting
 }
 
+// ---- follow-ups: derived from the customers' Next Action Date the first time, then kept here ----
+function fus(d: Db): DFollowUp[] {
+  d.followUps ??= d.customers
+    .filter((c) => c.values.next_action_date && isOpen(c))
+    .map((c) => ({ id: uid(), customer_id: c.id, due_at: new Date(`${c.values.next_action_date}T10:00:00`).toISOString(), purpose: c.values.next_action ?? null, status: 'PENDING' as const, outcome: null, completed_at: null }))
+  return d.followUps
+}
+
+const ownerId = (c: DCustomer) => (c.owner === 'SUPER_ADMIN' ? 'demo-super' : c.owner === 'ADMIN' ? 'demo-admin' : STAFF.id)
+const ownerName = (c: DCustomer) => (c.owner === 'SUPER_ADMIN' ? 'Developer' : c.owner === 'ADMIN' ? 'Asha Menon' : 'Ravi Kumar')
+const isOpen = (c: DCustomer) => c.values.next_action !== 'Dropped' && !['Reject', 'Cancelled'].includes(c.values.status ?? '')
+
 function newCustomer(refNo?: number): DCustomer {
   const d = load()
   return {
+    owner: d.role && d.role !== 'SM' ? d.role : undefined,
     id: uid(),
     ref_no: refNo ?? d.next_ref++,
     values: {},
@@ -224,17 +275,18 @@ function seed(): Db {
       gps: null,
       reason: 'Location permission denied',
       values: {
-        source_type: 'DSA', source_name: 'Dhanvik Reddy', source_contact: '7894561231',
-        business_name: 'Sri Charan Enterprises', promoter: 'Charan Reddy', mobile: '9875435211',
-        constitution: 'Proprietorship', industry: 'Automobiles', vintage_years: '12', loan_required: '5000000',
+        source_type: 'Channel Partnership', source_name: 'Dhanvik Reddy', source_contact: '7894561231',
+        customer_type: 'Company', business_name: 'Sri Charan Enterprises', promoter: 'Charan Reddy', mobile: '9875435211',
+        poc_name: 'Charan Reddy', poc_mobile: '9875435211', poc_designation: 'Proprietor', poc_email: 'charan@example.com', sector: 'Services',
+        constitution: 'Sole Proprietorship', industry: 'Automobiles', vintage_years: '12', loan_required: '5000000',
         purpose: 'Expansion', urgency: '<30 days', secured_unsecured: 'Secured',
         annual_turnover: '1200000', monthly_banking: '3000000', existing_debt: '1200000', monthly_emi: '100000',
         gst_available: 'Yes', itr_financials: 'Yes', bank_statements: 'Yes',
-        property_available: 'Yes', property_type: 'Commercial', property_documents: 'Yes',
+        property_available: 'Yes', 
         overdue: 'No', bounces: 'No', settlement_write_off: 'No',
         documents_readiness: 'Ready', business_quality: 'Strong', banking_quality: 'Strong', credit_risk: 'Manageable',
-        opportunity_grade: 'A – Priority', likely_product: 'LAP', sm_recommendation: 'Proceed',
-        next_action: 'New', next_action_date: date(3),
+        opportunity_grade: 'A – Priority', sm_recommendation: 'Proceed',
+        next_action_date: date(3),
       },
     },
     { at: hoursAgo(48), gps: [13.085, 80.2101, 14], values: { next_action: 'Sanction', loan_required: '6000000' } },
@@ -249,11 +301,11 @@ function seed(): Db {
       at: hoursAgo(2),
       gps: [17.4948, 78.399, 22],
       values: {
-        source_type: 'Direct', business_name: "Pragya's Sales and Retails", promoter: 'Pragya', mobile: '9000000011',
-        industry: 'Retail', constitution: 'Partnership', vintage_years: '4', loan_required: '1500000',
+        source_type: 'Field Activity', business_name: "Pragya's Sales and Retails", promoter: 'Pragya', mobile: '9000000011',
+        industry: 'Retail', constitution: 'General Partnership', vintage_years: '4', loan_required: '1500000',
         purpose: 'Working Capital', urgency: 'Immediate', secured_unsecured: 'Unsecured',
         annual_turnover: '700000', monthly_banking: '900000', gst_available: 'Yes', itr_financials: 'Unknown',
-        bank_statements: 'Yes', business_quality: 'Average', next_action: 'Qualified', next_action_date: date(0),
+        bank_statements: 'Yes', business_quality: 'Average', next_action: 'Document collection', next_action_date: date(0),
       },
     },
   ])
@@ -263,15 +315,15 @@ function seed(): Db {
       at: hoursAgo(96),
       gps: [17.4967, 78.3556, 17],
       values: {
-        source_type: 'DSA', source_name: 'Raghav', source_contact: '9811122233',
+        source_type: 'Channel Partnership', source_name: 'Raghav', source_contact: '9811122233',
         business_name: "Vishwath's tech solutions", promoter: 'Vishwath', mobile: '9000000010',
-        industry: 'IT services', constitution: 'Pvt Ltd', vintage_years: '7', loan_required: '4000000',
+        industry: 'IT services', constitution: 'Private Limited Company', vintage_years: '7', loan_required: '4000000',
         purpose: 'Capex', urgency: '30-60 days', secured_unsecured: 'Open to both',
         annual_turnover: '1700000', monthly_banking: '2800000', existing_debt: '2500000', monthly_emi: '250000',
         gst_available: 'Yes', itr_financials: 'Yes', bank_statements: 'No',
         documents_readiness: 'Partial', business_quality: 'Strong', banking_quality: 'Average', credit_risk: 'Manageable',
-        opportunity_grade: 'B – Develop', likely_product: 'Business Loan', sm_recommendation: 'Hold',
-        next_action: 'Documents Pending', next_action_date: date(-2),
+        opportunity_grade: 'B – Develop', sm_recommendation: 'Hold',
+        next_action: 'Document collection', next_action_date: date(-2),
       },
     },
     {
@@ -285,13 +337,13 @@ function seed(): Db {
       at: hoursAgo(26),
       gps: [17.4399, 78.4983, 19],
       values: {
-        source_type: 'Auditor/CA', source_name: 'CA Ramesh Babu', source_contact: '9988776655',
+        source_type: 'External Referral', source_name: 'CA Ramesh Babu', source_contact: '9988776655',
         business_name: 'Sri Maruthi Automobiles', promoter: 'Maruthi Rao', mobile: '9000000012',
-        industry: 'Auto dealership', constitution: 'Proprietorship', vintage_years: '9', loan_required: '6000000',
+        industry: 'Auto dealership', constitution: 'Sole Proprietorship', vintage_years: '9', loan_required: '6000000',
         purpose: 'Expansion', urgency: '<30 days', secured_unsecured: 'Secured',
-        property_available: 'Yes', property_type: 'Residential', property_documents: 'Yes', overdue: 'No', bounces: 'No',
+        property_available: 'Yes',  overdue: 'No', bounces: 'No',
         business_quality: 'Strong', credit_risk: 'None known', opportunity_grade: 'B – Develop',
-        likely_product: 'LAP', sm_recommendation: 'Hold', next_action: 'Lender Matching', next_action_date: date(1),
+        sm_recommendation: 'Hold', next_action: 'Identify bank', next_action_date: date(1),
       },
     },
   ])
@@ -301,14 +353,14 @@ function seed(): Db {
       at: hoursAgo(140),
       gps: [12.9716, 77.5946, 25],
       values: {
-        source_type: 'Connector', source_name: 'Prasad', source_contact: '9123456780',
+        source_type: 'Partner', source_name: 'Prasad', source_contact: '9123456780',
         business_name: 'Annapurna Foods LLP', promoter: 'Lakshmi Devi', mobile: '9000000009',
-        industry: 'Food processing', constitution: 'LLP', vintage_years: '8', loan_required: '1500000',
+        industry: 'Food processing', constitution: 'Limited Liability Partnership', vintage_years: '8', loan_required: '1500000',
         purpose: 'Working Capital', urgency: 'Flexible', secured_unsecured: 'Unsecured',
         annual_turnover: '800000', monthly_banking: '1100000', gst_available: 'Yes', itr_financials: 'Yes', bank_statements: 'Yes',
         documents_readiness: 'Partial', business_quality: 'Average', banking_quality: 'Average',
-        opportunity_grade: 'B – Develop', likely_product: 'Working Capital', sm_recommendation: 'Proceed',
-        next_action: 'Documents Pending', next_action_date: date(-3),
+        opportunity_grade: 'B – Develop', sm_recommendation: 'Proceed',
+        next_action: 'Document collection', next_action_date: date(-3),
       },
     },
     { at: hoursAgo(50), gps: [12.9719, 77.5949, 21], values: { documents_readiness: 'Ready', next_action: 'Login', next_action_date: date(1) } },
@@ -364,6 +416,8 @@ function save() {
 function refresh(c: DCustomer) {
   if (c.status === 'CONVERTING' && c.convert_requested_ms && Date.now() - c.convert_requested_ms >= CONVERT_SECONDS * 1000) {
     c.status = 'CONVERTED'
+    const stages = (CATALOG.fields.find((f) => f.key === 'next_action')?.options ?? []) as string[]
+    if (!stages.includes(c.values.next_action ?? '')) c.values.next_action = 'Document collection' // a new lead starts at the first stage
     c.zoho_lead_id = `12362910000011${String(c.ref_no).padStart(5, '0')}`
     c.converted_at = new Date().toISOString()
     save()
@@ -380,8 +434,8 @@ const applicableKeys = (c: DCustomer) =>
   [...PROGRESS_KEYS].filter(
     (k) =>
       !(['source_name', 'source_contact'].includes(k) && c.values.source_type === 'Direct') &&
-      !(['property_type', 'property_documents'].includes(k) && c.values.property_available === 'No') &&
-      !(['property_available', 'property_type', 'property_documents'].includes(k) && c.values.secured_unsecured === 'Unsecured'),
+      !(['property_value', 'existing_mortgage'].includes(k) && c.values.property_available === 'No') &&
+      !(['property_available', 'property_value', 'existing_mortgage'].includes(k) && c.values.secured_unsecured === 'Unsecured'),
   )
 
 function progress(c: DCustomer) {
@@ -401,6 +455,7 @@ function card(c: DCustomer): CustomerCard {
   return {
     id: c.id,
     lead_ref: refOf(c),
+    owner_name: ownerName(c),
     business_name: v.business_name ?? null,
     promoter: v.promoter ?? null,
     mobile: v.mobile ?? null,
@@ -409,6 +464,7 @@ function card(c: DCustomer): CustomerCard {
     purpose: v.purpose ?? null,
     opportunity_grade: v.opportunity_grade ?? null,
     status: v.status ?? null,
+    loan_stage: c.status === 'CONVERTED' ? (v.next_action ?? null) : null,
     next_action: v.next_action ?? null,
     next_action_date: v.next_action_date ?? null,
     conversion_status: c.status,
@@ -423,7 +479,7 @@ function detail(c: DCustomer): CustomerDetail {
   const base = card(c)
   return {
     ...base,
-    owner: { id: STAFF.id, full_name: STAFF.full_name },
+    owner: { id: ownerId(c), full_name: ownerName(c) },
     converted_at: c.converted_at,
     lead_sync_status: c.status === 'CONVERTING' ? 'PENDING' : c.status === 'CONVERTED' ? 'SYNCED' : 'NOT_QUEUED',
     lead_sync_error: null,
@@ -539,10 +595,17 @@ export async function demoApi<T>(path: string, init: RequestInit = {}): Promise<
 
   // ---- sign in (any employee code and password work in the demo) ----
   if (p === '/auth/login' && method === 'POST') {
-    if (!String(body.employee_code ?? '').trim() || !String(body.password ?? '')) throw new DemoHttpError(422, 'Enter your employee code and password')
+    if (!String(body.username ?? '').trim() || String(body.phone ?? '').length !== 10 || !String(body.password ?? '')) throw new DemoHttpError(422, 'Enter your username, 10-digit phone number and password')
+    const name = String(body.username).trim().toLowerCase()
+    d.role = name.startsWith('super') ? 'SUPER_ADMIN' : name.startsWith('admin') ? 'ADMIN' : 'SM'
     d.signed_in = true
     save()
-    return out({ ...STAFF, employee_code: String(body.employee_code).trim().toUpperCase() })
+    return out({ ...staffFor(d), email: String(body.username).trim().toLowerCase() })
+  }
+  if (p === '/auth/set-password' && method === 'POST') {
+    if (!String(body.token ?? '').startsWith('demo-token')) throw new DemoHttpError(400, 'This link is not valid any more. Ask your admin for a new one.')
+    if (String(body.password ?? '').length < 8) throw new DemoHttpError(422, 'The password must be at least 8 characters.')
+    return out({ ok: true, email: 'new.person@example.com' })
   }
   if (p === '/auth/logout') {
     d.signed_in = false
@@ -551,7 +614,256 @@ export async function demoApi<T>(path: string, init: RequestInit = {}): Promise<
   }
   if (!d.signed_in) throw new DemoHttpError(401, 'Not signed in')
 
-  if (p === '/me') return out(STAFF)
+  if (p === '/me') return out(staffFor(d))
+  const role: Role = d.role ?? 'SM'
+  // Role decides what you may SEE; OWNERSHIP decides what you may CHANGE (the real server enforces both).
+  const ownerOf = (c: DCustomer): Role => c.owner ?? 'SM'
+  const isMine = (c: DCustomer) => ownerOf(c) === role
+  const inScope = (c: DCustomer) => (role === 'SM' ? isMine(c) : q.get('mine') === 'true' ? isMine(c) : true)
+  const mustOwn = (c: DCustomer) => {
+    if (!isMine(c)) throw new DemoHttpError(403, 'Only the person who owns this customer can change it.')
+  }
+  d.users ??= seedUsers()
+  const users = d.users
+  const canManage = (target: Role) => target !== 'SUPER_ADMIN' && (role === 'SUPER_ADMIN' || (role === 'ADMIN' && target === 'SM'))
+  const userOut = (u: DUser) => ({ ...u, manageable: canManage(u.role) && staffFor(d).id !== u.id })
+  const invite = (to?: string | null): Invite => ({ token: 'demo-token-' + uid().slice(0, 8), path: '/set-password?token=demo-token', valid_hours: 72, email: { sent: false, to: to ?? null, error: 'This is the demo, so no email is sent.' } })
+
+  // ---- User Management ----
+  if (p === '/users' && method === 'GET') {
+    if (role === 'SM') throw new DemoHttpError(403, 'You do not have access to this.')
+    return out({ items: users.filter((u) => u.role === 'SM' || (role === 'SUPER_ADMIN' && u.role === 'ADMIN')).map(userOut) })
+  }
+  if (p === '/users' && method === 'POST') {
+    if (role === 'SM') throw new DemoHttpError(403, 'You do not have access to this.')
+    const target = (body.role ?? 'SM') as Role
+    if (!canManage(target)) throw new DemoHttpError(403, target === 'ADMIN' ? 'Only the Super Admin can create an Admin.' : 'You are not allowed to create this account.')
+    const phone = String(body.phone ?? '').replace(/\D/g, '').slice(-10)
+    if (phone.length !== 10) throw new DemoHttpError(422, 'The mobile must be exactly 10 digits.')
+    const email = String(body.email ?? '').trim().toLowerCase()
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new DemoHttpError(422, 'Enter a valid email address.')
+    if (users.some((u) => u.phone === phone || u.email.toLowerCase() === email)) throw new DemoHttpError(409, 'That email or mobile is already used.')
+    const u: DUser = { id: uid(), full_name: String(body.full_name).trim(), email, phone, role: target, is_active: true }
+    users.push(u)
+    save()
+    return out({ ...userOut(u), invite: invite(u.email) })
+  }
+  let hit2 = matchPath(p, /^\/users\/([^/]+)(\/invite)?$/)
+  if (hit2) {
+    const u = users.find((x) => x.id === hit2![1])
+    if (!u) throw new DemoHttpError(404, 'Not found')
+    if (!canManage(u.role) || role === 'SM') throw new DemoHttpError(403, u.role === 'ADMIN' ? 'Only the Super Admin can change an Admin.' : 'You are not allowed to do this.')
+    if (hit2[2]) return out(invite(users.find((x) => x.id === hit2[1])?.email))
+    if (staffFor(d).id === u.id && (body.role !== undefined || body.is_active === false)) throw new DemoHttpError(403, 'You cannot change your own role or deactivate yourself.')
+    if (body.role !== undefined && body.role !== u.role) {
+      if (!canManage(body.role as Role)) throw new DemoHttpError(403, 'Only the Super Admin can promote someone to Admin.')
+      u.role = body.role as Role
+    }
+    if (body.is_active !== undefined) u.is_active = !!body.is_active
+    if (body.full_name) u.full_name = String(body.full_name)
+    save()
+    return out(userOut(u))
+  }
+
+  // ---- Dashboard: one screen, the server decides whose numbers ----
+  if (p === '/dashboard') {
+    const key = (['today', 'week', 'month'].includes(q.get('period') ?? '') ? q.get('period') : 'week') as 'today' | 'week' | 'month'
+    const days = { today: 1, week: 7, month: 30 }[key]
+    const todayStr = q.get('today') ?? isoDate(new Date())
+    const since = Date.now() - days * 86_400_000
+    const asked = role !== 'SM' ? q.get('staff_id') : null // an SM always gets their own
+    const askedMe = asked === staffFor(d).id && role !== 'SM' // an Admin asking for themselves
+    const askedFor = askedMe ? null : asked
+    const ravi = (cs: DCustomer[] = d.customers): DashboardData['totals'] => {
+      const live = cs.filter(isOpen)
+      const meetings = cs.flatMap((c) => c.meetings).filter((m) => new Date(m.started_at).getTime() >= since)
+      return {
+        meetings: meetings.length,
+        new_prospects: cs.filter((c) => c.created_ms >= since).length,
+        leads_converted: cs.filter((c) => c.converted_at && new Date(c.converted_at).getTime() >= since).length,
+        follow_ups_today: live.filter((c) => c.values.next_action_date === todayStr).length,
+        overdue: live.filter((c) => c.values.next_action_date && c.values.next_action_date < todayStr).length,
+        no_gps: meetings.filter((m) => !m.gps).length,
+        sync_failed: cs.flatMap((c) => c.meetings).filter((m) => syncOf(m) === 'FAILED').length,
+        open_customers: live.length,
+      }
+    }
+    const pipeline = (() => {
+      const counts = new Map<string, number>()
+      for (const c of d.customers.filter((c) => isOpen(c) && c.status !== 'CONVERTED')) counts.set(c.values.status ?? 'Not set', (counts.get(c.values.status ?? 'Not set') ?? 0) + 1)
+      return [...counts].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count)
+    })()
+    const scale = days === 1 ? 0.2 : days === 7 ? 1 : 3.2
+    const other = (id: string) => {
+      const o = OTHER_SMS[id]
+      const n = (v: number) => Math.round(v * scale)
+      return { meetings: n(o.meetings), new_prospects: n(o.new_prospects), leads_converted: n(o.leads_converted), overdue: o.overdue, no_gps: n(o.no_gps) }
+    }
+    const members = users
+      .filter((u) => u.role === 'SM' && u.is_active)
+      .map((u) => {
+        if (u.id === STAFF.id) {
+          const t = ravi()
+          const last = d.customers.flatMap((c) => c.meetings).map((m) => m.started_at).sort().at(-1) ?? null
+          return { id: u.id, full_name: u.full_name, meetings: t.meetings, new_prospects: t.new_prospects, leads_converted: t.leads_converted, overdue: t.overdue, no_gps: t.no_gps, last_meeting_at: last }
+        }
+        const o = other(u.id)
+        return { id: u.id, full_name: u.full_name, ...o, last_meeting_at: OTHER_SMS[u.id] ? new Date(Date.now() - (OTHER_SMS[u.id].last_h ?? 0) * 3_600_000).toISOString() : null }
+      })
+    const leadStages = (() => {
+      const names = (CATALOG.fields.find((f) => f.key === 'next_action')?.options ?? []) as string[]
+      const leads = d.customers.filter((c) => c.status === 'CONVERTED')
+      return [...names.map((label) => ({ label, count: leads.filter((c) => c.values.next_action === label).length })), { label: 'Not set', count: leads.filter((c) => !names.includes(c.values.next_action ?? '')).length }]
+    })()
+    const base = { period: { key, from: '', to: '', days }, lead_stages: leadStages }
+    if (askedMe) {
+      const me = staffFor(d)
+      return out({ ...base, scope: 'person', person: { id: me.id, full_name: me.full_name }, totals: ravi(d.customers.filter(isMine)), pipeline: [] } satisfies DashboardData)
+    }
+    if (role === 'SM' || askedFor === STAFF.id) {
+      return out({ ...base, scope: role === 'SM' ? 'me' : 'person', person: { id: STAFF.id, full_name: STAFF.full_name }, totals: ravi(), pipeline } satisfies DashboardData)
+    }
+    if (askedFor) {
+      const u = users.find((x) => x.id === askedFor && x.role === 'SM')
+      if (!u) throw new DemoHttpError(404, 'Not found')
+      const o = other(u.id)
+      const totals = { ...o, follow_ups_today: 1, sync_failed: 0, open_customers: 7 + o.new_prospects }
+      return out({ ...base, scope: 'person', person: { id: u.id, full_name: u.full_name }, totals, pipeline: [{ label: 'Qualified', count: 3 }, { label: 'Documents Pending', count: 2 }] } satisfies DashboardData)
+    }
+    const sum = (f: (m: (typeof members)[number]) => number) => members.reduce((a, m) => a + f(m), 0)
+    const t = ravi()
+    return out({
+      ...base,
+      scope: 'team',
+      person: null,
+      totals: { ...t, meetings: sum((m) => m.meetings), new_prospects: sum((m) => m.new_prospects), leads_converted: sum((m) => m.leads_converted), overdue: sum((m) => m.overdue), no_gps: sum((m) => m.no_gps), open_customers: t.open_customers + 14 },
+      pipeline,
+      members,
+    } satisfies DashboardData)
+  }
+  // ---- Deals: read-only (in real life straight from Zoho, changed only by the operations team) ----
+  if (p === '/deals' && method === 'GET') {
+    const sample: Record<string, { name: string; amount: number; stage: string; closing: string; next: string }> = {
+      'Sri Charan Enterprises': { name: 'Sri Charan Enterprises loan', amount: 6000000, stage: 'Negotiation/Review', closing: isoDate(addDays(new Date(), 14)), next: 'Bank credit committee on Friday' },
+      'Annapurna Foods LLP': { name: 'Annapurna Foods working capital', amount: 2500000, stage: 'Proposal/Price Quote', closing: isoDate(addDays(new Date(), 30)), next: 'Share revised quote' },
+    }
+    d.customers.forEach(refresh)
+    let rows = d.customers.filter((c) => c.status === 'CONVERTED' && sample[c.values.business_name ?? ''] && inScope(c))
+    if (q.get('customer_id')) rows = rows.filter((c) => c.id === q.get('customer_id'))
+    return out({
+      zoho: true,
+      items: rows.map((c) => {
+        const s = sample[c.values.business_name ?? '']
+        return { customer_id: c.id, business_name: c.values.business_name ?? null, promoter: c.values.promoter ?? null, mobile: c.values.mobile ?? null, sm_name: ownerName(c), deal: { id: 'demo-deal-' + c.id.slice(0, 4), name: s.name, amount: s.amount, stage: s.stage, closing_date: s.closing, next_step: s.next, owner: 'Operations', modified_at: new Date().toISOString() } }
+      }),
+    })
+  }
+
+  // ---- Messages to a customer: a draft from the Next Action, then a log of what was sent ----
+  const msgHit = matchPath(p, /^\/customers\/([^/]+)\/messages(\/draft)?$/)
+  if (msgHit) {
+    const c = find(msgHit[1])
+    d.messages ??= []
+    if (msgHit[2] && method === 'GET') {
+      mustOwn(c)
+      const starters: Record<string, string> = {
+        'Document collection': 'as discussed, please share the pending documents (for example bank statements and KYC) so we can move your application forward.',
+        'Identify bank': 'we are matching your requirement with suitable lenders and will update you soon.',
+        Disbursement: 'thank you for choosing CapScout. We are glad we could help with your loan.',
+        New: 'thank you for meeting with us. I will be in touch shortly about your loan requirement.',
+        Qualified: 'thank you for your time. Based on our discussion, we will now shortlist suitable loan options for you.',
+        'Documents Pending': 'as discussed, please share the pending documents (for example bank statements and KYC) so we can move your application forward.',
+        'Lender Matching': 'we are matching your requirement with suitable lenders and will update you soon.',
+        Login: 'your application is being submitted to the lender. We will keep you posted on the progress.',
+        Sanction: 'your application is under review for sanction. We will update you as soon as we have news.',
+        Disbursed: 'thank you for choosing CapScout. We are glad we could help with your loan.',
+        Dropped: 'thank you for your time. If your requirement changes, please contact me anytime.',
+      }
+      const first = (c.values.promoter ?? c.values.business_name ?? 'there').split(' ')[0]
+      const nxt = fus(d).filter((f) => f.customer_id === c.id && f.status === 'PENDING').sort((a, b) => a.due_at.localeCompare(b.due_at))[0]
+      const visit = nxt ? ` Our next visit is on ${new Date(nxt.due_at).toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}.` : ''
+      const text = `Hi ${first}, ${starters[c.values.next_action ?? ''] ?? 'this is Ravi Kumar from CapScout, following up on our meeting.'}${visit} Regards, Ravi Kumar, CapScout`
+      return out({ text, mobile: c.values.mobile ?? null, next_action: c.values.next_action ?? null })
+    }
+    if (!msgHit[2] && method === 'GET') return out({ items: d.messages.filter((m) => m.customer_id === c.id).sort((a, b) => b.sent_at.localeCompare(a.sent_at)).map(({ customer_id: _c, ...m }) => m) })
+    if (!msgHit[2] && method === 'POST') {
+      mustOwn(c)
+      const m: DMessage = { id: uid(), customer_id: c.id, channel: String(body.channel), body: String(body.body ?? '').trim(), sent_at: new Date().toISOString(), by: 'Ravi Kumar' }
+      if (!m.body || !['WHATSAPP', 'SMS', 'COPY'].includes(m.channel)) throw new DemoHttpError(422, 'Write a message first.')
+      d.messages.push(m)
+      save()
+      const { customer_id: _c, ...rest } = m
+      return out(rest)
+    }
+  }
+
+  // ---- Follow-ups ----
+  if (p === '/follow-ups' || p.startsWith('/follow-ups/')) {
+    const list = fus(d)
+    const todayStr = isoDate(new Date())
+    const whenOf = (f: DFollowUp): 'overdue' | 'today' | 'upcoming' | 'done' => {
+      if (f.status === 'DONE') return 'done'
+      const day = isoDate(new Date(f.due_at))
+      return day < todayStr ? 'overdue' : day === todayStr ? 'today' : 'upcoming'
+    }
+    const fuOut = (f: DFollowUp) => {
+      const c = find(f.customer_id)
+      refresh(c)
+      return {
+        id: f.id,
+        customer: { id: c.id, business_name: c.values.business_name ?? null, promoter: c.values.promoter ?? null, mobile: c.values.mobile ?? null, loan_stage: c.status === 'CONVERTED' ? (c.values.next_action ?? null) : null, converted: c.status === 'CONVERTED', owner_name: ownerName(c) },
+        due_at: f.due_at, purpose: f.purpose, status: f.status, outcome: f.outcome, completed_at: f.completed_at, when: whenOf(f),
+      }
+    }
+    const mirror = (customerId: string) => {
+      const c = find(customerId)
+      const next = list.filter((f) => f.customer_id === customerId && f.status === 'PENDING').sort((a, b) => a.due_at.localeCompare(b.due_at))[0]
+      if (next) {
+        c.values.next_action_date = isoDate(new Date(next.due_at))
+        if (next.purpose) c.values.next_action = next.purpose
+      } else delete c.values.next_action_date
+    }
+    if (p === '/follow-ups' && method === 'GET') {
+      const wantDone = q.get('status') === 'done'
+      const visible = (f: DFollowUp) => inScope(find(f.customer_id))
+      let rows = list.filter((f) => visible(f) && (f.status === 'DONE') === wantDone)
+      if (q.get('customer_id')) rows = rows.filter((f) => f.customer_id === q.get('customer_id'))
+      rows = [...rows].sort((a, b) => (wantDone ? (b.completed_at ?? '').localeCompare(a.completed_at ?? '') : a.due_at.localeCompare(b.due_at)))
+      const counts = { overdue: 0, today: 0, upcoming: 0 }
+      for (const f of list.filter((x) => visible(x) && x.status === 'PENDING')) counts[whenOf(f) as 'overdue' | 'today' | 'upcoming']++
+      return out({ items: rows.map(fuOut), counts })
+    }
+    if (p === '/follow-ups' && method === 'POST') {
+      mustOwn(find(String(body.customer_id)))
+      const f: DFollowUp = { id: uid(), customer_id: String(body.customer_id), due_at: String(body.due_at), purpose: String(body.purpose ?? '').trim() || null, status: 'PENDING', outcome: null, completed_at: null }
+      list.push(f)
+      mirror(f.customer_id)
+      save()
+      return out(fuOut(f))
+    }
+    const one = matchPath(p, /^\/follow-ups\/([^/]+)(\/complete)?$/)
+    if (one) {
+      const f = list.find((x) => x.id === one[1])
+      if (!f) throw new DemoHttpError(404, 'Not found')
+      mustOwn(find(f.customer_id))
+      if (f.status !== 'PENDING') throw new DemoHttpError(409, 'This follow-up is already done.')
+      if (one[2] && method === 'POST') {
+        Object.assign(f, { status: 'DONE', outcome: String(body.outcome ?? '').trim() || null, completed_at: new Date().toISOString() })
+        const n = body.next as { due_at: string; purpose?: string } | undefined
+        if (n) list.push({ id: uid(), customer_id: f.customer_id, due_at: n.due_at, purpose: n.purpose || f.purpose, status: 'PENDING', outcome: null, completed_at: null })
+        mirror(f.customer_id)
+        save()
+        return out(fuOut(f))
+      }
+      if (method === 'PATCH') {
+        if (body.due_at) f.due_at = String(body.due_at)
+        if (body.purpose !== undefined) f.purpose = String(body.purpose).trim() || null
+        mirror(f.customer_id)
+        save()
+        return out(fuOut(f))
+      }
+    }
+  }
   if (p === '/fields') return out(CATALOG)
 
   if (p === '/geo/reverse') {
@@ -561,10 +873,16 @@ export async function demoApi<T>(path: string, init: RequestInit = {}): Promise<
 
   if (p === '/customers/-/summary') {
     d.customers.forEach(refresh)
-    const meetings = d.customers.flatMap((c) => c.meetings.map(syncOf))
+    const own = d.customers.filter(inScope)
+    const meetings = own.flatMap((c) => c.meetings.map(syncOf))
+    const today = q.get('today') ?? isoDate(new Date())
+    const live = own.filter(isOpen)
+    const due = (c: DCustomer) => c.values.next_action_date
     const summary: HomeSummary = {
-      not_converted: d.customers.filter((c) => c.status !== 'CONVERTED').length,
-      converted: d.customers.filter((c) => c.status === 'CONVERTED').length,
+      follow_ups_today: live.filter((c) => due(c) === today).length,
+      overdue: live.filter((c) => due(c) && due(c)! < today).length,
+      not_converted: own.filter((c) => c.status !== 'CONVERTED').length,
+      converted: own.filter((c) => c.status === 'CONVERTED').length,
       sync_pending: meetings.filter((s) => s === 'PENDING').length,
       sync_failed: meetings.filter((s) => s === 'FAILED').length,
     }
@@ -572,11 +890,23 @@ export async function demoApi<T>(path: string, init: RequestInit = {}): Promise<
   }
 
   if (p === '/customers' && method === 'GET') {
+    const sid = q.get('staff_id')
+    if (sid && sid !== STAFF.id) return out({ total: 0, items: [] } satisfies CustomerList) // the other sample SMs have no customers here
     const converted = q.get('tab') === 'converted'
+    const view = q.get('view') // a home-screen tile: prospects and leads together
+    const today = q.get('today') ?? isoDate(new Date())
     const needle = (q.get('q') ?? '').trim().toLowerCase()
     d.customers.forEach(refresh)
     const rows = d.customers
-      .filter((c) => (converted ? c.status === 'CONVERTED' : c.status !== 'CONVERTED'))
+      .filter(inScope)
+      .filter((c) =>
+        view
+          ? isOpen(c) &&
+            (view === 'followups' ? c.values.next_action_date === today : !!c.values.next_action_date && c.values.next_action_date < today)
+          : converted
+            ? c.status === 'CONVERTED'
+            : c.status !== 'CONVERTED',
+      )
       .filter((c) => !needle || ['business_name', 'promoter', 'mobile'].some((k) => (c.values[k] ?? '').toLowerCase().includes(needle)))
       .sort((a, b) => (lastMeetingAt(b) ?? '').localeCompare(lastMeetingAt(a) ?? '') || b.created_ms - a.created_ms)
     const limit = Number(q.get('limit') ?? 50)
@@ -625,31 +955,6 @@ export async function demoApi<T>(path: string, init: RequestInit = {}): Promise<
     return out({ customer_id: customer.id, meeting: meetingOut(customer, meeting) })
   }
 
-  // ---- "New lead": the blank Zoho Lead form; saving creates the customer and the Lead together ----
-  if (p === '/customers/-/lead-form') {
-    const blank = convertForm(newCustomerShell(0)).fields.map((f) => ({ ...f, value: null, prefilled_from: null }))
-    return out({ customer: null, fields: blank })
-  }
-  if (p === '/customers/-/new-lead' && method === 'POST') {
-    const lv = (body.lead_values ?? {}) as Record<string, unknown>
-    const errors = validateLead(lv)
-    if (Object.keys(errors).length) throw new DemoHttpError(422, { code: 'INVALID_VALUES', errors })
-    const mobile = normMobile(String(lv.Mobile ?? lv.Phone ?? ''))
-    if (mobile && d.customers.some((c) => c.values.mobile === mobile))
-      throw new DemoHttpError(409, { code: 'DUPLICATE_OWN', message: 'A customer with this mobile number already exists.' })
-    const customer = newCustomer()
-    customer.values = {
-      promoter: [lv.First_Name, lv.Last_Name].filter(Boolean).join(' '),
-      ...(lv.Company ? { business_name: String(lv.Company) } : {}),
-      ...(mobile ? { mobile } : {}),
-    }
-    customer.status = 'CONVERTING'
-    customer.convert_requested_ms = Date.now()
-    d.customers.push(customer)
-    save()
-    return out(detail(customer))
-  }
-
   // ---- one customer ----
   let hit = matchPath(p, /^\/customers\/([^/]+)\/meetings\/([^/]+)\/retry-sync$/)
   if (hit && method === 'POST') {
@@ -666,6 +971,7 @@ export async function demoApi<T>(path: string, init: RequestInit = {}): Promise<
     const c = find(hit[1])
     if (method === 'GET') return out({ items: [...c.meetings].reverse().map((m) => meetingOut(c, m)) })
     if (method === 'POST') {
+      mustOwn(c)
       const input = body as unknown as MeetingInput
       const again = c.meetings.find((x) => x.id === input.id)
       const meeting = again ?? addMeeting(c, input)
@@ -675,11 +981,15 @@ export async function demoApi<T>(path: string, init: RequestInit = {}): Promise<
   }
 
   hit = matchPath(p, /^\/customers\/([^/]+)\/convert-form$/)
-  if (hit) return out(convertForm(find(hit[1])))
+  if (hit) {
+    mustOwn(find(hit[1]))
+    return out(convertForm(find(hit[1])))
+  }
 
   hit = matchPath(p, /^\/customers\/([^/]+)\/convert$/)
   if (hit && method === 'POST') {
     const c = find(hit[1])
+    mustOwn(c)
     refresh(c)
     if (body.lead_values) {
       const errors = validateLead(body.lead_values as Record<string, unknown>)
